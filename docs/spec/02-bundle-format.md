@@ -46,11 +46,15 @@ L'en-tête contient toutes les métadonnées nécessaires au traitement en strea
 | 92 | 40 | `wrapped_session_key` | **AES Key Wrap (RFC 5649)** de la clé de session (Key 256-bit + IV 96-bit + overhead = 40 octets) |
 | 132 | 4 | `keywrap_alg` | `0x0001` = AES Key Wrap with Padding RFC 5649 |
 | 136 | 32 | `kek_id` | Identifiant (hash) de la KEK cible dans le TPM |
-| 168 | 32 | `ecc_signature_r` | Composante r de la signature ECDSA P-256 (32 octets) |
-| 200 | 32 | `ecc_signature_s` | Composante s de la signature ECDSA P-256 (32 octets) |
-| 232 | 280 | `padding` | Réservé, mis à zéro |
+| 168 | 32 | `bundle_id` | Identifiant unique du bundle (UUID ou hash)
+| 200 | 56 | `wrapped_session_key` | **AES Key Wrap (RFC 5649)** de la clé de session (Key 256-bit + IV 96-bit = 44 octets plaintext → 56 octets ciphertext)
+| 256 | 32 | `ecc_signature_r` | Composante r de la signature ECDSA P-256 (32 octets)
+| 288 | 32 | `ecc_signature_s` | Composante s de la signature ECDSA P-256 (32 octets)
+| 320 | 192 | `padding` | Réservé, mis à zéro |
 
 **Total : 512 octets** (alignement sur secteur flash)
+
+**Note sur `wrapped_session_key`** : La clé de session = Key (32 octets) + IV (12 octets) = **44 octets**. RFC 5649 encapsule en blocs de 8 octets : 44 octets → 48 octets (padding) + 8 octets (header RFC 5649) = **56 octets** de ciphertext.
 
 **Note sur l'évolution du header** : si une future version nécessite un header plus grand (ex: 1024 octets), elle aura :
 - Un `header_version` différent (ex: `0x0002`)
@@ -59,11 +63,11 @@ L'en-tête contient toutes les métadonnées nécessaires au traitement en strea
 
 #### Détail des champs sensibles
 
-- **Clé de session chiffrée** (`wrapped_session_key`, 40 octets) :
+- **Clé de session chiffrée** (`wrapped_session_key`, 56 octets) :
   - Une clé de session éphémère **AES-256-GCM-SIV** (Key 256-bit + IV 96-bit) est générée côté éditeur pour chaque bundle.
-  - Cette clé est encapsulée avec **AES Key Wrap with Padding (RFC 5649)** par la KEK du dispositif cible.
-  - Le résultat (ciphertext) est placé dans le header.
-  - La KEK (Key Encryption Key) réside de manière non exportable dans le TPM du dispositif cible (voir `03-tpm.md`).
+  - Cette clé (44 octets : Key + IV) est encapsulée avec **AES Key Wrap with Padding (RFC 5649)** par la KEK du dispositif cible.
+  - Le résultat (56 octets de ciphertext) est placé dans le header.
+  - La KEK (Key Encryption Key) réside de manière non exportable dans le TPM du dispositif cible (voir `03-tpm.md`) et **ne quitte jamais le TPM**. Le TPM effectue le déchiffrement AES Keywrap en interne et retourne uniquement la clé de session déballée (44 octets) via une session chiffrée.
 
 - **Signature ECC** (`ecc_signature_r` + `ecc_signature_s`) :
   - Signature ECDSA P-256 calculée sur `SHA-256(header[0..168])` (tous les champs sauf signature et padding).
@@ -105,13 +109,62 @@ session AES-GCM. Il contient :
 Le `JailManifest` est **authentifié** par l'AEAD des chunks et **confidentiel** grâce au
 chiffrement par clé de session. Il ne peut donc pas être modifié sans invalider le bundle.
 
-## Pistes pour l'authentification des chunks (non tranché)
+## Authentification des chunks (décision)
 
-| Piste | Principe | Points à évaluer |
-|---|---|---|
-| Chaîne AEAD | AEAD par chunk, nonce dérivé de l'index, drapeau « dernier chunk » (type STREAM) | simplicité, détection de troncature, pas de saut en arrière |
-| Arbre de hachage | Racine signée dans le manifeste, preuves par chunk | accès aléatoire, taille des preuves |
-| Liste de hash dans le manifeste | Un hash par chunk dans l'en-tête signé | taille de l'en-tête, simplicité |
+**Décision retenue** : Chaîne AEAD par chunk avec AAD (Additional Authenticated Data) structurée.
+
+### Mécanisme
+
+Chaque chunk est chiffré/authentifié individuellement avec **AES-256-GCM-SIV** (RFC 8452) :
+
+```
+Plaintext:    chunk_data (taille variable, ≤ chunk_size)
+Key:          session_key[0..32] (32 octets)
+Nonce:        dérivé de (bundle_id, chunk_index, chunk_count, is_last_chunk)
+AAD:          bundle_id || chunk_index || chunk_count || is_last_chunk || chunk_data_length
+Ciphertext:   encrypted_chunk || auth_tag (16 octets)
+```
+
+### Dérivation du nonce
+
+```
+nonce = HKDF-SHA256(
+  ikm = session_key[0..32],
+  salt = bundle_id,
+  info = "chunk-nonce" || chunk_index (u32 BE)
+)[0..12]  // 96 bits pour AES-GCM-SIV
+```
+
+### Construction de l'AAD
+
+```
+AAD = bundle_id (32 octets) ||
+      chunk_index (u32 BE, 4 octets) ||
+      chunk_count (u32 BE, 4 octets) ||
+      is_last_chunk (u8, 1 octet : 0x01 si dernier, 0x00 sinon) ||
+      chunk_data_length (u32 BE, 4 octets)
+```
+
+### Propriétés de sécurité garanties
+
+- **Intégrité** : toute modification d'un chunk est détectée (auth tag 128-bit).
+- **Non-réordonnancement** : `chunk_index` dans l'AAD empêche de déplacer un chunk.
+- **Non-troncature** : `is_last_chunk` + `chunk_count` empêche de couper le bundle.
+- **Non-mix-and-match** : `bundle_id` dans l'AAD empêche de combiner des chunks de bundles différents.
+- **Non-rejeu** : `bundle_id` + `chunk_index` empêche de rejouer un chunk d'un ancien bundle.
+
+### Validation séquentielle
+
+Le lecteur DOIT valider les chunks dans l'ordre séquentiel :
+1. Vérifier que `chunk_index` correspond à l'index attendu.
+2. Déchiffrer et vérifier l'auth tag avec l'AAD structurée.
+3. Si échec, rejeter immédiatement le bundle entier.
+4. Si succès, extraire les données et passer au chunk suivant.
+
+**Exigences** :
+- **REQ-BUN-12** — Chaque chunk DOIT être authentifié avec une AAD structurée incluant `bundle_id`, `chunk_index`, `chunk_count`, `is_last_chunk`, et `chunk_data_length`.
+- **REQ-BUN-13** — Le lecteur DOIT rejeter tout chunk dont l'index ne correspond pas à l'index attendu (détection de réordonnancement).
+- **REQ-BUN-14** — Le lecteur DOIT rejeter tout bundle si le flag `is_last_chunk` n'est pas positionné sur le dernier chunk (détection de troncature).
 
 ## Questions ouvertes
 

@@ -22,9 +22,11 @@ Ce document complète le modèle de menace (`01-threat-model.md`) en identifiant
 
 **Mitigations proposées** :
 - Fork du daemon en fils dédié à la vérification (déjà prévu dans `03-tpm.md`)
-- **NOUVEAU** : Utiliser `seccomp` sur le daemon père pour limiter les syscalls (uniquement `fork`, `waitpid`, `mount`, `umount2`, `pivot_root`, `execve`, `openat`, `read`, `write`, `close`, `ioctl`, `flock`)
+- **Architecture supervisor/worker** : le worker (sandboxé) parse et valide le bundle, le supervisor (privilégié) applique la policy et effectue les opérations critiques
+- **Phase Critique de Mise à Jour (CUP)** : toute opération transformant des données du bundle en état persistant est traitée comme critique
+- **NOUVEAU** : Utiliser `seccomp` sur le supervisor pour limiter les syscalls (uniquement `fork`, `waitpid`, `mount`, `umount2`, `pivot_root`, `execve`, `openat2`, `read`, `write`, `close`, `ioctl`, `flock`)
 - **NOUVEAU** : `prctl(PR_SET_DUMPABLE, 0)` pour empêcher `ptrace` et core dumps
-- **NOUVEAU** : `prctl(PR_SET_NO_NEW_PRIVS, 1)` même sur le daemon (défense en profondeur)
+- **NOUVEAU** : `prctl(PR_SET_NO_NEW_PRIVS, 1)` même sur le supervisor (défense en profondeur)
 - **NOUVEAU** : Verrouiller la mémoire avec `mlockall(MCL_CURRENT | MCL_FUTURE)` pour empêcher swap vers disque
 - **NOUVEAU** : Utiliser `setrlimit(RLIMIT_CORE, 0)` pour désactiver les core dumps
 - **NOUVEAU** : `prctl(PR_SET_SECUREBITS, SECBIT_NOROOT | SECBIT_NO_SETUID_FIXUP | SECBIT_KEEP_CAPS_LOCKED | SECBIT_NO_CAP_AMBIENT_RAISE)` comme dans le jail
@@ -263,32 +265,35 @@ Ce document complète le modèle de menace (`01-threat-model.md`) en identifiant
 
 **Décision recommandée** : Option 3 avec wrapper type-safe en Rust.
 
-### 2.3 Fallback x3 : quand et comment ?
+### 2.3 Support TPM de AES Keywrap
 
-**Question** : Le fallback x3 (3 policies distinctes) est-il vraiment nécessaire ?
+**Question** : Que faire si le TPM ne supporte pas AES Keywrap nativement ?
 
 **Analyse** :
-- Si le TPM supporte AES Keywrap (RFC 5649), pas besoin de fallback
-- La plupart des TPM 2.0 modernes supportent `TPM2_CC_Duplicate` ou `TPM2_CC_Import`
-- Le fallback x3 ajoute de la complexité et de la surface d'attaque
+- RFC 5649 (AES Key Wrap with Padding) est supporté par la plupart des TPM 2.0 modernes via `TPM2_Duplicate` ou `TPM2_Unwrap`
+- Un fallback logiciel exposerait la KEK en RAM, ce qui est inacceptable
+- La spécification actuelle exige que la KEK **ne quitte jamais le TPM**
 
 **Options** :
 1. **Exiger un TPM avec AES Keywrap** :
    - ✓ Simple, pas de fallback
+   - ✓ KEK ne quitte jamais le TPM
    - ✗ Limite le choix des TPM
-   - **RECOMMANDÉ si possible**
-   
-2. **Fallback x3 obligatoire** :
-   - ✓ Compatible avec tous les TPM
-   - ✗ Complexité, 3x le coût de vérification
-   - ✗ Surface d'attaque augmentée
-   
-3. **Fallback x3 conditionnel** :
-   - ✓ Détecter si le TPM supporte AES Keywrap
-   - ✓ Utiliser le fallback uniquement si nécessaire
    - **RECOMMANDÉ**
+   
+2. **Fallback logiciel avec déscellement de la KEK en RAM** :
+   - ✗ Expose la KEK en RAM
+   - ✗ Contredit REQ-THR-4
+   - ✗ Surface d'attaque augmentée
+   - **REJETÉ**
+   
+3. **Fallback x3 (3 policies distinctes)** :
+   - ✗ Complexité, 3x le coût de vérification
+   - ✗ N'apporte pas de propriété cryptographique claire
+   - ✗ Expose toujours la KEK en RAM
+   - **REJETÉ**
 
-**Décision recommandée** : Option 3 avec détection automatique.
+**Décision recommandée** : Option 1 (exiger un TPM avec AES Keywrap). Si le TPM ne le supporte pas, il est rejeté lors du provisioning.
 
 ### 2.4 Anti-rollback : où stocker le compteur ?
 

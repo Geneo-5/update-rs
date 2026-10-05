@@ -42,9 +42,11 @@ Statut : Brouillon (proposition à valider)
 - **REQ-THR-1** — Un bundle modifié, tronqué, réordonné ou rejoué DOIT être rejeté.
 - **REQ-THR-2** — Un bundle ne DOIT pas être déchiffrable sans le TPM (et l'état de boot) du device visé.
 - **REQ-THR-3** — Une version inférieure au compteur anti-rollback DOIT être rejetée.
-- **REQ-THR-4** — La KEK NE DOIT JAMAIS être exportable du TPM, ni même en clair dans la RAM, sauf pendant une brève fenêtre sous policy de vérification de signature (fallback x3).
+- **REQ-THR-4** — La KEK NE DOIT JAMAIS quitter le TPM, ni même transiter en clair dans la RAM. Le TPM DOIT effectuer le déchiffrement AES Keywrap (RFC 5649) en interne et retourner uniquement la clé de session déballée. Sans AES Keywrap, le TPM est utiliser 3 fois avec un déchiffrement AES et 3 fenêtre de validation TPM avec échange chiffré.
 - **REQ-THR-5** — Un attaquant écoutant le bus TPM (A4) NE DOIT PAS obtenir la clé de session, la KEK, ou les paramètres de commande sensibles.
-- **REQ-THR-6** — La fenêtre d'exposition de la KEK en RAM (cas fallback) DOIT être minimisée (zeroize immédiat, mlock, pas de core dump).
+- **REQ-THR-6** — La chaîne de confiance DOIT être ancrée depuis le ROM/SoC secure boot jusqu'au TPM (bootloader vérifié → kernel vérifié → rootfs vérifié → `updated` vérifié → TPM policy/PCR).
+- **REQ-THR-7** — Tout contenu issu du bundle DOIT être traité comme **hostile** jusqu'à sa transformation en une représentation interne validée et bornée.
+- **REQ-THR-8** — Aucune donnée contrôlée par le bundle ne DOIT déterminer directement une primitive privilégiée sans passer par une policy indépendante du bundle.
 
 ## Menaces spécifiques au jail
 
@@ -58,11 +60,52 @@ menaces suivantes s'ajoutent aux menaces globales ci-dessus :
 | J3 | Payload avec accès proc/sys | Tente d'utiliser `/proc`/`/sys` en écriture pour escalader (atténué par options `ro,nosuid,nodev,noexec`) |
 | J4 | Payload consommant des ressources | Fork bomb, épuisement mémoire/CPU (atténué par cgroups, PID namespace, timeouts) |
 
+## Phase Critique de Mise à Jour (Critical Update Phase — CUP)
+
+**Définition** : toute opération qui transforme des données provenant du bundle en état persistant du système est une **phase critique** et doit être traitée comme une opération de sécurité privilégiée.
+
+Cela inclut :
+- Parsing du bundle, manifeste, configuration
+- Validation et migration de format
+- Génération de configuration
+- Écriture sur MTD/block devices
+- Remplacement atomique de fichiers
+- Modification de permissions/ownership
+- Création de symlinks
+- Modification de fichiers utilisés par des services privilégiés
+
+**Propriété de sécurité** : même si le bundle est signé par un éditeur de confiance, son contenu doit être considéré comme **adversarial au niveau de l'implémentation**. La signature garantit l'authenticité, pas l'absence de bugs d'exploitation dans le parser.
+
+**Architecture supervisor/worker** :
+```
+                  PRIVILEGED (supervisor)
+                      │
+             ┌────────▼────────┐
+             │ Update supervisor│
+             │                  │
+             │ policy / state   │
+             │ TPM              │
+             │ MTD              │
+             │ filesystem      │
+             └────────┬────────┘
+                      │
+              minimal IPC (validated IR)
+                      │
+             ┌────────▼────────┐
+             │ Update worker   │  (sandboxed)
+             │                 │
+             │ parse           │
+             │ validate        │
+             │ transform       │
+             └─────────────────┘
+```
+
+Le **worker** peut être très fortement sandboxé. Le **supervisor** conserve les privilèges indispensables (MTD, filesystem, TPM, mount, activation).
+
 ## Questions ouvertes
 
 1. Les bundles sont-ils par appareil, par famille d'appareils, ou pour toute la flotte ?
 2. Faut-il la résistance à un attaquant post-quantique « store now, decrypt later » sur la confidentialité ?
 3. Quel niveau de protection du bus TPM (sessions chiffrées obligatoires — décidé, voir `03-tpm.md`) ?
-4. Modèle de menace pour le fallback x3 : la répétition probabiliste suffit-elle contre A6 ?
-5. Que se passe-t-il si l'EK/AK du TPM est compromise (root of trust hardware) ?
-6. Un attaquant A6 peut-il forcer le mode fallback même si le TPM supporte AES Keywrap, pour exposer la KEK ?
+4. Que se passe-t-il si l'EK/AK du TPM est compromise (root of trust hardware) ?
+5. Quel bootloader (U-Boot) et quel mécanisme de secure boot pour ancrer la chaîne de confiance jusqu'au TPM ?

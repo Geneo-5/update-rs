@@ -126,12 +126,15 @@ au début de la séquence, puis se déprivilégie avant d'exécuter le script d'
 
 **Nettoyage sur signal** :
 - Les signaux `SIGTERM`, `SIGINT`, `SIGHUP` déclenchent un cleanup immédiat.
-- Le processus monteur installe un handler qui :
-  1. Envoie `SIGKILL` au processus jail (via son PID).
-  2. Attend la fin du fils (`waitpid`).
-  3. Démonte récursivement tous les mounts.
-  4. Libère le tmpfs.
-  5. Termine avec un code d'erreur approprié.
+- Le processus monteur installe un handler qui positionne un flag atomique (`AtomicBool`), puis le thread principal (qui boucle sur ce flag) effectue le cleanup **en dehors du handler**.
+- **Pas de cleanup complexe dans le handler** : un handler POSIX DOIT être async-signal-safe. Le handler se contente de :
+  1. Positionner `cleanup_requested = true`
+  2. Envoyer `SIGKILL` au processus jail (via son PID, opération async-signal-safe)
+- Le thread principal détecte le flag et effectue :
+  1. Attend la fin du fils (`waitpid`)
+  2. Démonte récursivement tous les mounts
+  3. Libère le tmpfs
+  4. Termine avec un code d'erreur approprié
 - **Pas de dépendance à systemd** : le cleanup est géré par le daemon lui-même.
 ```
 
@@ -331,31 +334,181 @@ host_bind_back = "/var/log/update-payload"
 
 ## Modèle de sécurité du jail
 
-### Surface d'attaque spécifique
+### Principe fondamental : le manifeste est une **capability policy**, pas une configuration
 
-Le jail ajoute aux menaces globales (voir [01-threat-model.md](01-threat-model.md)) les
-menaces locales suivantes :
+**Modèle antérieur (incorrect)** : le manifeste signé est considéré comme fiable, et tout ce qu'il demande est autorisé.
+
+**Modèle retenu** : le manifeste est une **demande de capacités** qui doit être validée contre une **policy machine** indépendante du bundle.
+
+```
+Bundle demande :                  POLICY (indépendante du bundle) :
+    CAP_SYS_ADMIN                → caps_whitelist (définie par la machine)
+    /dev/mmcblk0                 → devices_whitelist
+    /etc                         → paths_whitelist
+    host_bind_back=/var/...      → output_api (descripteur contrôlé)
+          │                              │
+          └──────────┬───────────────────┘
+                     ▼
+              ┌──────────┐
+              │ allowed? │
+              └────┬─────┘
+                   │
+            ┌──────┴──────┐
+            ▼             ▼
+          jail         reject
+```
+
+**Propriété de sécurité** : la signature du bundle garantit l'authenticité, pas la légitimité des capacités demandées. Une signature valide ne doit jamais donner accès à des privilèges non autorisés par la policy machine.
+
+### Architecture supervisor/worker
+
+Le daemon `updated` est structuré en deux composants :
+
+**Supervisor (privilégié, root)** :
+- Accès TPM (`/dev/tpm0`, `/dev/tpmrm0`)
+- Montage/démontage de filesystems
+- Écriture sur MTD/block devices
+- Création de namespaces
+- Application de la policy machine
+- Activation/commit de la mise à jour
+
+**Worker (sandboxé, non-root)** :
+- Parsing du bundle et du manifeste
+- Validation et transformation des données
+- Génération de la représentation interne validée (IR)
+- Extraction des chunks
+- Retourne l'IR au supervisor via IPC sécurisé
+
+**Surface de code privilégié** : le supervisor DOIT avoir une surface de code minimale, déterministe et fortement bornée. Toute donnée issue du bundle DOIT être traitée comme **hostile** jusqu'à validation.
+
+### Surface d'attaque spécifique
 
 | Id | Menace | Atténuation |
 |---|---|---|
-| J1 | Payload échappant le jail via un bind mount mal configuré | Liste blanche `fsset` stricte, validation côté monteur, aucun `orig` en écriture sans `host_bind_back` explicite |
-| J2 | Device node malicieux donnant accès à un device sensible | Nœuds créés uniquement via `fsset` validé par signature du manifeste ; `major`/`minor` validés contre liste blanche |
-| J3 | `proc`/`sys` en écriture permettant escalade | Options `ro,nosuid,nodev,noexec` obligatoires ; `hidepid=invisible` pour `proc` |
+| J1 | Payload échappant le jail via un bind mount mal configuré | Liste blanche `fsset` stricte, validation par la policy machine, aucun `orig` en écriture sans API de sortie contrôlée |
+| J2 | Device node malicieux donnant accès à un device sensible | Nœuds créés uniquement via `fsset` validé par policy machine ; `major`/`minor` validés contre liste blanche machine |
+| J3 | `proc`/`sys` en écriture permettant escalade | Options `ro,nosuid,nodev,noexec` obligatoires ; `hidepid=invisible` pour `proc` ; masquage des sous-répertoires dangereux |
 | J4 | Seccomp contourné par un binaire du payload | Filtre installé **après** pivot_root, `no_new_privs=1` empêchant tout `setuid` ou `execve` vers des binaires privilégiés |
 | J5 | Capabilities conservées après execve | `SECBIT_KEEP_CAPS=0`, `keep_caps=0` sur execve, `PR_CAP_AMBIENT_CLEAR_ALL` |
-| J6 | Fuite de données du payload via bind mount inversé | `host_bind_back` limité à des zones spécifiques (logs) ; contenu validé après exécution |
-| J7 | Processus orphelin gardant des ressources | Pas de PID namespace ; le processus monteur attend le jail via `waitpid` et envoie `SIGKILL` sur timeout |
-| J8 | Race condition entre démontage et sortie | `MNT_DETACH` suivi de la sortie du monteur ; le tmpfs disparaît au dernier close |
+| J6 | Fuite de données du payload via API de sortie | API de sortie restrictive (descripteur contrôlé par supervisor), pas de chemin hôte arbitraire |
+| J7 | Processus orphelin gardant des ressources | Pas de PID namespace ; le supervisor attend le jail via `waitpid` et envoie `SIGKILL` sur timeout |
+| J8 | Race condition entre démontage et sortie | `MNT_DETACH` suivi de la sortie du supervisor ; le tmpfs disparaît au dernier close |
 | J9 | Attaque par symlink sur bind mount | Flag `MS_NOSYMFOLLOW` obligatoire sur tous les bind mounts host→jail |
+| J10 | TOCTOU sur résolution de chemins | Utilisation de `openat2()` avec `RESOLVE_*` au lieu de `realpath()` + `open()` |
+| J11 | Attaque par parser du manifeste | Worker sandboxé, manifeste traité comme hostile, validation stricte avant transmission au supervisor |
 
 ### Posture par défaut
 
 La posture par défaut est **deny-all, allow-list** :
 
-- Rien n'est monté sans règle `fsset` explicite.
-- Aucune capability n'est accordée sans être dans `caps_keep`.
+- Rien n'est monté sans règle `fsset` explicite **validée par la policy machine**.
+- Aucune capability n'est accordée sans être dans `caps_whitelist` (définie par la machine, pas par le bundle).
 - Aucun syscall n'est autorisé hors profil seccomp.
 - Aucun fichier du payload n'est accessible sans être dans `payload_file`/`payload_dir`.
+- Aucune écriture sur l'hôte n'est autorisée hors API de sortie contrôlée par le supervisor.
+
+## Résolution de chemins sécurisée
+
+**Problème** : `realpath()` n'est pas une protection suffisante contre les TOCTOU (Time-Of-Check-Time-Of-Use).
+
+**Solution** : utiliser `openat2()` avec les flags `RESOLVE_*` (Linux 5.6+) pour résoudre et ouvrir atomiquement :
+
+```rust
+use libc::{openat2, RESOLVE_NO_SYMLINKS, RESOLVE_BENEATH, RESOLVE_NO_MAGICLINKS};
+
+let how = OpenHow {
+    flags: O_RDONLY | O_NOFOLLOW,
+    mode: 0,
+    resolve: RESOLVE_NO_SYMLINKS | RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS,
+};
+
+let fd = openat2(dirfd, path, &how, size_of::<OpenHow>());
+```
+
+**Propriétés garanties** :
+- `RESOLVE_NO_SYMLINKS` : empêche le suivi de symlinks (équivalent à `MS_NOSYMFOLLOW`).
+- `RESOLVE_BENEATH` : empêche l'évasion via `..` ou chemins absolus.
+- `RESOLVE_NO_MAGICLINKS` : empêche le suivi de liens magiques (`/proc/*/fd/*`).
+
+**Fallback** : si `openat2()` n'est pas disponible (kernel < 5.6), utiliser une combinaison de `openat()` + `O_NOFOLLOW` + vérification manuelle, en documentant la fenêtre TOCTOU résiduelle.
+
+## API de sortie contrôlée (remplacement de `host_bind_back`)
+
+**Problème** : `host_bind_back` générique permet au bundle de spécifier un chemin hôte arbitraire, créant une primitive d'écriture `payload → fichier arbitraire sur l'hôte`.
+
+**Solution** : remplacer par une **API de sortie restrictive** où le supervisor fournit un descripteur contrôlé :
+
+```rust
+// Le supervisor crée un fichier temporaire dans une zone autorisée
+let output_dir = PathBuf::from("/var/log/update-rs/payload");
+let output_file = supervisor.create_output_file("payload.log")?;
+
+// Le supervisor passe le FD au worker via SCM_RIGHTS
+worker.send_fd(output_file.as_raw_fd())?;
+
+// Le worker monte le FD dans le jail
+mount_fd(worker_fd, "/var/log/payload/output.log")?;
+```
+
+**Propriétés** :
+- Le bundle ne contrôle pas le chemin hôte.
+- Le supervisor valide la zone de sortie (whitelist de répertoires).
+- Le supervisor peut inspecter/limiter la taille des sorties.
+- Pas de primitive d'écriture arbitraire.
+
+## Limites de ressources (cgroups)
+
+Le jail DOIT être contraint en ressources pour empêcher les attaques par exhaustion (fork bomb, épuisement mémoire/CPU).
+
+**Mécanisme** : `CLONE_NEWCGROUP` + cgroups v2 (ou v1 si kernel ancien).
+
+**Limites appliquées** :
+
+| Ressource | Limite | Justification |
+|---|---|---|
+| **PID** | `pids.max = 64` | Empêche les fork bombs |
+| **Mémoire** | `memory.max = 256M` | Limite l'allocation mémoire |
+| **CPU** | `cpu.max = 50%` (1 CPU sur 2) | Empêche l'épuisement CPU |
+| **I/O** | `io.max = 10 MB/s` | Limite la bande passante disque |
+
+**Implémentation** :
+```rust
+// Création du cgroup pour le jail
+let cgroup_path = "/sys/fs/cgroup/update-rs/payload-{bundle_id}";
+std::fs::create_dir_all(cgroup_path)?;
+
+// Application des limites
+std::fs::write(format!("{}/pids.max", cgroup_path), "64")?;
+std::fs::write(format!("{}/memory.max", cgroup_path), "268435456")?; // 256M
+std::fs::write(format!("{}/cpu.max", cgroup_path), "50000 100000")?; // 50%
+std::fs::write(format!("{}/io.max", cgroup_path), "major:minor rbps=10485760")?;
+
+// Ajout du processus jail au cgroup
+std::fs::write(format!("{}/cgroup.procs", cgroup_path), jail_pid.to_string())?;
+```
+
+**Note sur `CLONE_NEWCGROUP` sans `CLONE_NEWUSER`** : cela fonctionne, mais nécessite que le processus monteur (root) crée le cgroup parent et applique les limites avant de lancer le jail. Le jail ne peut pas modifier ses propres limites (car non-root dans le namespace).
+
+## Cleanup garanti après crash
+
+**Problème** : si le daemon crashe (SIGSEGV, SIGABRT, OOM killer), les mounts orphelins et le tmpfs peuvent persister.
+
+**Solution** :
+
+1. **Cleanup au démarrage** : au boot, `updated` vérifie la présence de mounts orphelins et les démonte :
+   ```rust
+   // Au démarrage, scan de /proc/mounts pour les mounts orphelins
+   let mounts = read_proc_mounts()?;
+   for mount in mounts.filter(|m| m.source.starts_with("/tmp/update-rs-")) {
+       umount2(mount.target, MNT_DETACH)?;
+   }
+   ```
+
+2. **Cleanup périodique** : un timer systemd (`update-rs-cleanup.timer`) lance `updated --cleanup` toutes les heures pour nettoyer les artefacts résiduels.
+
+3. **Cleanup au prochain boot** : un service systemd (`update-rs-cleanup.service`) avec `ConditionPathExists=/var/run/update-rs-crashed` nettoie les mounts orphelins au boot si le daemon a crashé.
+
+**Propriété de sécurité** : les mounts orphelins ne doivent pas persister au-delà du prochain boot. Le cleanup au démarrage est une **garantie de sécurité**, pas une simple optimisation.
 
 ## Profil seccomp
 

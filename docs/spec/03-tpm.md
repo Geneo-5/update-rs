@@ -40,21 +40,46 @@ La clé de session (Key 256-bit + IV 96-bit) est générée côté éditeur pour
 
 ### Déchiffrement de la clé de session
 
-**Cas 1 — Le TPM supporte AES Keywrap nativement** (`TPM2_Duplicate` avec AES ou `TPM2_Unwrap` selon implémentation) :
+**Processus unique** (le TPM DOIT supporter AES Keywrap nativement) :
+
 1. Le **TPM calcule lui-même le hash du header** via `TPM2_HashSequenceStart` + `TPM2_SequenceUpdate` + `TPM2_SequenceComplete` (mode PCR process). Le buffer du header est transmis par chunks au TPM.
 2. Le TPM vérifie la signature ECC du header via `TPM2_VerifySignature` sur le hash qu'il a calculé.
-3. Le TPM satisfait la policy de la KEK (`PolicyAuthorize`).
-4. Le TPM déchiffre directement la clé de session encapsulée et la retourne au logiciel (dans une session chiffrée).
+3. Le TPM satisfait la policy de la KEK via `PolicyAuthorize` (voir détail ci-dessous).
+4. Le TPM déchiffre directement la clé de session encapsulée (AES Keywrap RFC 5649) via `TPM2_Duplicate` ou `TPM2_Unwrap` et la retourne au logiciel (dans une session chiffrée).
+5. La KEK **ne quitte jamais le TPM**. Seule la clé de session (44 octets : Key + IV) est retournée au logiciel.
 
-**Cas 2 — Le TPM ne supporte pas AES Keywrap** (fallback avec 3 policies distinctes) :
-1. **Policy 1** : vérification de signature ECC du header + vérification de la version du bundle (doit être ≥ `min_firmware_version` stocké en NV).
-2. **Policy 2** : vérification que les paramètres d'entrée du déchiffrement (ciphertext, IV) correspondent au hash du header.
-3. **Policy 3** : vérification du compteur NV anti-rollback (le bundle doit avoir un counter > counter actuel).
-4. Si les 3 policies sont satisfaites, le TPM déscelle la KEK en RAM temporaire.
-5. Le logiciel effectue le AES Keywrap unwrap en software avec la KEK déscellée.
-6. La KEK est immédiatement zeroizée après usage.
+### Mécanisme `PolicyAuthorize` (détail)
 
-**Note** : Le fallback n'est pas une répétition x3 de la même vérification (ce qui serait cryptographiquement inutile), mais une **composition de 3 policies distinctes** qui vérifient des aspects différents de la légitimité du déchiffrement.
+`PolicyAuthorize` permet de conditionner l'usage d'une clé (la KEK) à la validation d'une policy par une autorité de signature (la clé de vérification ECC).
+
+**Séquence** :
+1. **Pré-calcul de la policy digeste** : lors du provisioning, la policy complète de la KEK est calculée sous forme de digeste (SHA-256) :
+   ```
+   policyDigest = SHA256(
+     TPM2_PolicyCommandCode(TPM2_CC_Duplicate) ||
+     TPM2_PolicyPCR(pcr_selection, pcr_digest) [optionnel]
+   )
+   ```
+2. **Signature de la policy** : l'éditeur signe cette policy avec sa clé privée ECC P-256 :
+   ```
+   policySignature = ECDSA_Sign(private_key, policyDigest)
+   ```
+3. **Vérification runtime** : lors de la mise à jour, le logiciel envoie au TPM :
+   - La policy (reconstruite dynamiquement)
+   - La signature `policySignature`
+   - La clé publique de vérification (déjà dans le TPM)
+   
+   Le TPM vérifie la signature via `TPM2_VerifySignature` et, si valide, satisfait la policy de la KEK.
+
+**Avantage** : la policy peut être mise à jour côté éditeur (en changeant la signature) sans re-provisionner la KEK dans le TPM.
+
+### Support TPM de AES Keywrap
+
+**Exigence** : le TPM cible DOIT supporter `TPM2_Duplicate` avec AES-256 ou `TPM2_Unwrap` (selon implémentation).
+
+**Vérification** : lors du provisioning, le fabricant DOIT vérifier que le TPM supporte le déchiffrement AES Keywrap en interne. Si le TPM ne le supporte pas, il DOIT être rejeté.
+
+**Pas de fallback logiciel** : contrairement aux versions antérieures de cette spécification, aucun fallback logiciel n'est prévu. La KEK ne quitte jamais le TPM, et le TPM effectue le déchiffrement AES Keywrap en interne.
 
 ### Sessions chiffrées via certificat ECC du TPM
 
@@ -90,10 +115,12 @@ Le daemon de mise à jour (`updated`) DOIT tourner en tant que **root** pour pou
 - **REQ-TPM-3** — Un compteur NV monotone DOIT porter l'anti-rollback ; il n'est incrémenté qu'après validation d'une mise à jour (commit).
 - **REQ-TPM-4** — Les secrets déscellés (KEK, clé de session) DOIVENT être zeroizés après usage (`mlock` + `madvise(DONTDUMP)`) et ne jamais être swappés.
 - **REQ-TPM-5** — La KEK DOIT avoir `sign=0`, `decrypt=1`, `restricted=0` dans ses attributs `TPMA_OBJECT`.
-- **REQ-TPM-6** — Si le TPM ne supporte pas AES Keywrap, la policy de la KEK DOIT composer 3 vérifications distinctes : signature ECC + version du bundle + compteur NV anti-rollback.
+- **REQ-TPM-6** — Le TPM cible DOIT supporter le déchiffrement AES Keywrap (RFC 5649) en interne via `TPM2_Duplicate` ou `TPM2_Unwrap`. Si le TPM ne le supporte pas, il DOIT être rejeté lors du provisioning.
 - **REQ-TPM-7** — La KEK NE DOIT JAMAIS être utilisable hors de sa policy (aucun `authValue` simple ne doit permettre de contourner la policy).
 - **REQ-TPM-8** — Le daemon de mise à jour DOIT tourner en tant que root et forker un processus fils dédié à la vérification du header.
 - **REQ-TPM-9** — Le TPM DOIT calculer lui-même le hash du header via `TPM2_HashSequenceStart` + `SequenceUpdate` + `SequenceComplete` (mode PCR process). Le logiciel NE DOIT PAS calculer le hash en software.
+- **REQ-TPM-10** — La policy de la KEK DOIT utiliser `PolicyAuthorize` pour permettre la mise à jour de la policy côté éditeur sans re-provisionner la KEK dans le TPM.
+- **REQ-TPM-11** — Le TPM DOIT être ancré dans une chaîne de boot vérifiée (secure boot → bootloader vérifié → kernel vérifié → rootfs vérifié → `updated` vérifié → TPM policy/PCR).
 
 ## Provisioning (esquisse)
 
@@ -116,3 +143,6 @@ Le daemon de mise à jour (`updated`) DOIT tourner en tant que **root** pour pou
 7. Support TPM de `TPM2_HashSequenceStart` : tous les TPM 2.0 le supportent-ils, ou faut-il un fallback software pour le hash ?
 8. Performance du hash TPM : impact sur le temps de vérification du header (latence bus SPI/I2C) ?
 9. Communication père-fils : pipe Unix suffit-il, ou faut-il un canal sécurisé supplémentaire (socket Unix + SCM_RIGHTS pour les fds TPM) ?
+10. Quel bootloader (U-Boot) et quel mécanisme de secure boot pour ancrer la chaîne de confiance jusqu'au TPM ?
+11. Comment mesurer et étendre les PCRs pour le bootloader, kernel, et rootfs ?
+12. Politique de rollback du compteur NV : comment empêcher un attaquant de faire revenir le compteur en arrière ?

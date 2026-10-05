@@ -40,14 +40,21 @@ n'est pas retenu, ses dépendances cryptographiques servent de liste de référe
 - Notre clé de session = Key (32 octets) + IV (12 octets) = **44 octets**, qui n'est pas un multiple de 8.
 - RFC 3394 nécessite que le plaintext soit un multiple de 8 octets (sinon padding manuel requis).
 - RFC 5649 gère automatiquement le padding avec un format spécifique (4 octets de Magic + 4 octets de longueur + données).
-- **Statut ANSSI** : RFC 5649 n'est pas explicitement mentionné dans les guides ANSSI, mais RFC 3394 est bien connu et accepté. RFC 5649 est une extension naturelle qui simplifie l'implémentation. Si RFC 5649 n'est pas disponible, utiliser RFC 3394 avec padding manuel (ajouter 4 octets de zéros pour atteindre 48 octets, puis troncature après unwrap).
+
+**Calcul de la taille ciphertext RFC 5649** :
+- Plaintext : 44 octets (Key 32 + IV 12)
+- Padding : RFC 5649 padde à un multiple de 8 octets → 44 → 48 octets
+- Header RFC 5649 : 8 octets (4 octets Magic + 4 octets longueur originale)
+- **Ciphertext final : 8 + 48 = 56 octets**
+
+**Statut ANSSI** : RFC 5649 n'est pas explicitement mentionné dans les guides ANSSI, mais RFC 3394 est bien connu et accepté. RFC 5649 est une extension naturelle qui simplifie l'implémentation.
 
 ## Exigences
 
 - **REQ-CRY-2** — Versions épinglées, `Cargo.lock` versionné, audit (`cargo audit`/`cargo vet`/`cargo deny`) en CI.
 - **REQ-CRY-3** — Vecteurs de test officiels (RFC, NIST) exécutés en CI, y compris sur ARMv7 (QEMU).
 - **REQ-CRY-4** — Les clés et secrets intermédiaires DOIVENT être zeroizés.
-- **REQ-CRY-5** — AES Key Wrap DOIT être implémenté selon **RFC 5649** (avec padding automatique). Si RFC 5649 n'est pas disponible, utiliser RFC 3394 avec padding manuel (ajouter 4 octets de zéros pour atteindre un multiple de 8 octets).
+- **REQ-CRY-5** — AES Key Wrap DOIT être implémenté selon **RFC 5649** (avec padding automatique). La taille du plaintext DOIT être 44 octets (Key 32 + IV 12), et le ciphertext résultant DOIT être 56 octets.
 - **REQ-CRY-6** — ECDSA P-256 utilisé pour la signature du header DOIT être généré avec un nonce déterministe (RFC 6979) côté éditeur pour éviter les fuites par biais de nonce.
 - **REQ-CRY-7** — L'implémentation d'AES Key Wrap DOIT être résistante aux fautes (vérification d'intégrité avant retour du plaintext).
 - **REQ-CRY-8** — AES-GCM-SIV (RFC 8452) DOIT être utilisé pour le chiffrement des chunks si disponible. Sinon, AES-256-GCM classique avec génération de nonce déterministe (ex: HKDF-SHA512 sur le chunk index + clé de session).
@@ -61,3 +68,4 @@ n'est pas retenu, ses dépendances cryptographiques servent de liste de référe
 5. Crate `aes-kw` : existe-t-il une implémentation auditable, ou faut-il implémenter sur `aes` ?
 6. Gestion des nonces ECDSA côté éditeur : RFC 6979 obligatoire ou optionnel ?
 7. Interaction avec le profil TPM retenu ([03-tpm.md](03-tpm.md)) : ECDH P-256 via TPM pour sessions chiffrées — quelles bibliothèques Rust fiables ?
+8. AES-GCM-SIV : nonce dérivé de manière déterministe (HKDF) ou aléatoire (CSPRNG) ?
