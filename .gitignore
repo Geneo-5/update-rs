@@ -1,0 +1,8 @@
+/target
+**/*.rs.bk
+.DS_Store
+*.swp
+# Clés et matériel de test : ne jamais committer de secrets
+/secrets/
+*.pem
+*.key

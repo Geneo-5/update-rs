@@ -1,0 +1,10 @@
+[package]
+name = "update-slot"
+description = "Gestion des slots A/B et de l'interface bootloader"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,10 @@
+[package]
+name = "update-bundle"
+description = "Format d'archive de mise à jour : lecture en streaming, vérification, déchiffrement"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,29 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+
+# Dépendances internes (chemins relatifs au workspace)
+[workspace.dependencies]
+update-bundle = { path = "crates/update-bundle" }
+update-tpm = { path = "crates/update-tpm" }
+update-slot = { path = "crates/update-slot" }
+
+# Politique de lint commune, inspirée du guide Rust de l'ANSSI
+# (ANSSI-FR/rust-guide) : pas de `unsafe`, pas de panics implicites.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "warn"

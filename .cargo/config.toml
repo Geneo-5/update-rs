@@ -1,0 +1,10 @@
+# Cross-compilation vers la Clearfog Pro (ARMv7). Le nom du linker correspond au
+# paquet Debian/Ubuntu gcc-arm-linux-gnueabihf. En production, privilégier le SDK
+# Buildroot/Yocto de l'image (sysroot cohérent, tpm2-tss inclus).
+
+[target.armv7-unknown-linux-gnueabihf]
+linker = "arm-linux-gnueabihf-gcc"
+runner = "qemu-arm -L /usr/arm-linux-gnueabihf"
+
+# Quand le backend TPM (tss-esapi) sera ajouté, définir :
+#   PKG_CONFIG_SYSROOT_DIR, PKG_CONFIG_PATH (vers le sysroot contenant libtss2)

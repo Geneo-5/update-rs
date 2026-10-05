@@ -1,0 +1,10 @@
+[package]
+name = "update-tpm"
+description = "Abstraction du TPM 2.0 : scellement de clés, index NV, compteur monotone, PCR"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
