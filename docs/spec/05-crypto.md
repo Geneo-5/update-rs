@@ -59,6 +59,115 @@ n'est pas retenu, ses dépendances cryptographiques servent de liste de référe
 - **REQ-CRY-7** — L'implémentation d'AES Key Wrap DOIT être résistante aux fautes (vérification d'intégrité avant retour du plaintext).
 - **REQ-CRY-8** — AES-GCM-SIV (RFC 8452) DOIT être utilisé pour le chiffrement des chunks si disponible. Sinon, AES-256-GCM classique avec génération de nonce déterministe (ex: HKDF-SHA512 sur le chunk index + clé de session).
 
+## Conformité au guide ANSSI 3.00 (2026)
+
+**Référence** : [Guide ANSSI — Règles et recommandations concernant le choix et le dimensionnement des mécanismes cryptographiques, version 3.00 (2026-03-20)](https://cyber.gouv.fr/publications/regles-et-recommandations-concernant-le-choix-et-le-dimensionnement-des-mecanismes-cryptographiques)
+
+### Cryptographie symétrique
+
+#### AES-256 (taille de clé et primitive)
+
+**Conformité** : ✅ **CONFORME** aux règles ET recommandations post-quantiques
+
+- **Règle `RègleTailleCléSym`** : taille minimale 128 bits → AES-256 utilise 256 bits ✅
+- **Recommandation `RecoPQTailleCléSym`** : sécurité post-quantique nécessite au moins 192 bits → AES-256 utilise 256 bits ✅
+- **Règle `RègleTailleBlocSym`** : blocs d'au moins 128 bits → AES utilise des blocs de 128 bits ✅
+- **Règle `RèglePrimChiffBloc`** : pas d'attaque classique < 2^128 opérations → AES-256 conforme ✅
+- **Règle `RèglePQPrimChiffBloc`** : pas d'attaque quantique < 2^80 opérations et profondeur < 2^48 → AES-256 conforme ✅
+- **Recommandation `RecoPQPrimChiffBloc`** : pas d'attaque quantique < 2^128 opérations et profondeur < 2^64 → AES-256 conforme ✅
+
+**Verdict** : AES-256 est explicitement listé comme conforme aux règles ET recommandations post-quantiques dans le guide ANSSI 3.00.
+
+#### AES-GCM-SIV (RFC 8452)
+
+**Conformité** : ✅ **CONFORME**
+
+- **Règle `RègleModeChiff`** : pas d'attaque exploitant < 2^(n/2) blocs sous une même clé → AES-GCM-SIV conforme (borne birthday-bound respectée) ✅
+- **Recommandation `RecoModeChiff.1`** : mode non déterministe → AES-GCM-SIV utilise un nonce unique par message ✅
+- **Recommandation `RecoModeChiff.2`** : preuve de sécurité dans un modèle pertinent → AES-GCM-SIV a une preuve de sécurité dans le modèle standard ✅
+- **Recommandation `RecoModeChiff.3`** : ne pas employer isolément un mode sans intégrité → AES-GCM-SIV est un mode AEAD (chiffrement authentifié) ✅
+
+**Note** : AES-GCM-SIV n'est pas explicitement mentionné dans le guide ANSSI 3.00, mais il est conforme aux règles génériques sur les modes opératoires. Il est également référencé dans les guides BSI (Allemagne) et SOG-IS, que l'ANSSI suit généralement.
+
+#### AES Key Wrap with Padding (RFC 5649)
+
+**Conformité** : ✅ **CONFORME**
+
+- Utilise AES-256 comme primitive sous-jacente → conforme aux règles sur AES-256
+- Mécanisme d'encapsulation de clé standardisé (RFC 5649)
+- Pas explicitement mentionné dans le guide ANSSI 3.00, mais RFC 3394 (AES Key Wrap sans padding) est bien connu et accepté. RFC 5649 est une extension naturelle qui simplifie l'implémentation pour des tailles non multiples de 8 octets.
+
+### Cryptographie asymétrique
+
+#### ECDSA P-256 (courbe NIST)
+
+**Conformité** : ⚠️ **ACCEPTABLE** (avec justification)
+
+- **Non post-quantique** : ECDSA P-256 est vulnérable à l'algorithme de Shor sur un ordinateur quantique suffisamment puissant.
+- **Guide ANSSI 3.00** : pour une sécurité post-quantique, il faudrait utiliser des algorithmes post-quantiques (ML-DSA, Dilithium, etc.).
+- **Atténuation** : ECDSA P-256 est utilisé **uniquement via TPM** pour la vérification de la signature du header. La clé privée n'est jamais exposée (côté éditeur uniquement), et l'opération de vérification est effectuée par le TPM lui-même.
+- **Justification** : l'utilisation via TPM élimine la surface d'attaque logicielle. Le risque post-quantique est limité car :
+  1. L'attaquant quantique devrait cibler le TPM (matériel sécurisé)
+  2. La signature protège uniquement le header, pas le payload (qui est chiffré avec AES-256, post-quantique)
+  3. Un compromis post-quantique permettrait de forger des headers, mais pas de déchiffrer les payloads (protégés par AES-256 + clé encapsulée par TPM)
+
+**Recommandation** : pour une future version, envisager une transition vers des algorithmes post-quantiques (ML-DSA-65 ou ML-DSA-87) lorsque les TPM les supporteront nativement.
+
+#### Ed25519 + ML-DSA (signatures éditeur)
+
+**Conformité** : ✅ **CONFORME** (hybride classique + post-quantique)
+
+- **Ed25519** : signature classique basée sur Curve25519
+- **ML-DSA** (Dilithium) : signature post-quantique sélectionnée par le NIST
+- **Hybride** : les deux signatures sont utilisées en parallèle pour garantir la sécurité même si l'un des deux algorithmes est compromis
+- **Conforme** aux recommandations post-quantiques du guide ANSSI 3.00
+
+### Fonctions de hachage
+
+#### SHA-256
+
+**Conformité** : ✅ **CONFORME**
+
+- **Règle `RègleHachage`** : pas d'attaque classique < 2^128 opérations → SHA-256 conforme (résistance aux préimages et collisions) ✅
+- **Règle `RèglePQHachage`** : pas d'attaque quantique < 2^80 opérations et profondeur < 2^48 → SHA-256 conforme (Grover réduit la complexité à 2^128) ✅
+- **Recommandation `RecoPQHachage`** : pas d'attaque quantique < 2^128 opérations et profondeur < 2^64 → SHA-256 conforme ✅
+
+### Synthèse de conformité
+
+| Primitive | Conformité | Justification |
+|---|---|---|
+| AES-256 | ✅ Conforme | Taille de clé 256 bits, blocs 128 bits, résistant aux attaques classiques et quantiques |
+| AES-GCM-SIV | ✅ Conforme | Mode AEAD, nonce unique, preuve de sécurité |
+| AES Key Wrap (RFC 5649) | ✅ Conforme | Utilise AES-256, mécanisme standardisé |
+| ECDSA P-256 | ⚠️ Acceptable | Non post-quantique, mais utilisé via TPM uniquement |
+| Ed25519 + ML-DSA | ✅ Conforme | Hybride classique + post-quantique |
+| SHA-256 | ✅ Conforme | Résistant aux attaques classiques et quantiques |
+
+### Durée de vie des clés (crypto-période)
+
+Le guide ANSSI 3.00 (section A.4.1) mentionne la notion de **crypto-période** (durée de vie maximale des clés) pour réduire l'effet d'une éventuelle compromission.
+
+**Notre architecture** :
+- **Clé de session** : éphémère, unique par bundle (une nouvelle clé est générée pour chaque mise à jour)
+- **KEK** : fixe à vie du dispositif (stockée dans le TPM, non exportable)
+- **Clé de vérification ECC** : fixe à vie du dispositif (stockée dans le TPM, publique uniquement)
+
+**Verdict** : ✅ **CONFORME**. L'utilisation de clés de session éphémères (une par bundle) est excellente et suit les meilleures pratiques.
+
+### Recommandations post-quantiques
+
+Le guide ANSSI 3.00 recommande de viser une sécurité post-quantique pour les mécanismes utilisés au-delà du 1er janvier 2030 (RecoSécuLongTerme).
+
+**Notre architecture** :
+- **Chiffrement du payload** : AES-256-GCM-SIV → **post-quantique** ✅
+- **Encapsulation de clé** : AES Key Wrap avec AES-256 → **post-quantique** ✅
+- **Signature du header** : ECDSA P-256 → **non post-quantique** ⚠️ (mais utilisé via TPM uniquement)
+- **Signatures éditeur** : Ed25519 + ML-DSA → **hybride post-quantique** ✅
+
+**Verdict** : ⚠️ **PARTIELLEMENT CONFORME**. Le chiffrement du payload est post-quantique, mais la signature du header (ECDSA P-256) ne l'est pas. Cependant, ce risque est atténué par l'utilisation via TPM.
+
+**Recommandation** : surveiller l'évolution des TPM pour adopter des algorithmes de signature post-quantiques (ML-DSA) lorsque le support sera disponible.
+
 ## Questions ouvertes
 
 1. Hybride PQ/classique dès la v1, ou classique d'abord avec agilité prévue ?
@@ -69,3 +178,5 @@ n'est pas retenu, ses dépendances cryptographiques servent de liste de référe
 6. Gestion des nonces ECDSA côté éditeur : RFC 6979 obligatoire ou optionnel ?
 7. Interaction avec le profil TPM retenu ([03-tpm.md](03-tpm.md)) : ECDH P-256 via TPM pour sessions chiffrées — quelles bibliothèques Rust fiables ?
 8. AES-GCM-SIV : nonce dérivé de manière déterministe (HKDF) ou aléatoire (CSPRNG) ?
+9. **Transition post-quantique pour ECDSA P-256** : quel calendrier pour adopter ML-DSA dans les TPM ?
+10. **Migration de clé** : comment gérer la rotation de la KEK si une vulnérabilité est découverte dans AES-256 (improbable mais à prévoir) ?

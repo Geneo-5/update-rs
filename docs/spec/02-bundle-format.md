@@ -165,6 +165,19 @@ Le lecteur DOIT valider les chunks dans l'ordre séquentiel :
 - **REQ-BUN-13** — Le lecteur DOIT rejeter tout chunk dont l'index ne correspond pas à l'index attendu (détection de réordonnancement).
 - **REQ-BUN-14** — Le lecteur DOIT rejeter tout bundle si le flag `is_last_chunk` n'est pas positionné sur le dernier chunk (détection de troncature).
 
+## Conformité cryptographique
+
+**Référence** : [Guide ANSSI — Règles et recommandations concernant le choix et le dimensionnement des mécanismes cryptographiques, version 3.00 (2026-03-20)](https://cyber.gouv.fr/publications/regles-et-recommandations-concernant-le-choix-et-le-dimensionnement-des-mecanismes-cryptographiques)
+
+Les algorithmes utilisés dans le format de bundle sont conformes au guide ANSSI 3.00 :
+
+- **AES-256-GCM-SIV** : conforme aux règles ET recommandations post-quantiques (taille de clé 256 bits, blocs 128 bits)
+- **AES Key Wrap (RFC 5649)** : conforme, utilise AES-256 comme primitive sous-jacente
+- **ECDSA P-256** : acceptable (non post-quantique, mais utilisé via TPM uniquement)
+- **SHA-256** : conforme aux règles et recommandations
+
+Voir [05-crypto.md](05-crypto.md) pour l'analyse détaillée de conformité.
+
 ## Questions ouvertes
 
 1. Accès séquentiel strict ou reprise de téléchargement (seek par chunk) ?

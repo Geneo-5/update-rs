@@ -196,13 +196,28 @@ Le daemon de mise à jour (`updated`) DOIT tourner en tant que **root** pour pou
 6. **Sessions chiffrées** : EK (Endorsement Key) ECC P-256 déjà présente, ou AK (Attestation Key) créée et certifiée par le fabricant.
 7. **Enrôlement** : export de la clé publique de vérification (pour référence), EK certificate, et attestation de la KEK vers le registre côté serveur.
 
+## Conformité cryptographique
+
+**Référence** : [Guide ANSSI — Règles et recommandations concernant le choix et le dimensionnement des mécanismes cryptographiques, version 3.00 (2026-03-20)](https://cyber.gouv.fr/publications/regles-et-recommandations-concernant-le-choix-et-le-dimensionnement-des-mecanismes-cryptographiques)
+
+Les algorithmes utilisés dans l'architecture TPM sont conformes au guide ANSSI 3.00 :
+
+- **KEK AES-256** : conforme aux règles ET recommandations post-quantiques (taille de clé 256 bits)
+- **AES Key Wrap (RFC 5649)** : conforme, utilise AES-256 comme primitive sous-jacente
+- **ECDSA P-256** : acceptable (non post-quantique, mais utilisé via TPM uniquement pour la vérification)
+- **ECDH P-256** : acceptable (utilisé via TPM pour les sessions chiffrées)
+
+**Note sur la taille de la KEK** : le guide ANSSI 3.00 recommande une taille minimale de 128 bits (règle) et 192 bits pour la sécurité post-quantique (recommandation). AES-256 (256 bits) dépasse ces exigences et est conforme.
+
+Voir [05-crypto.md](05-crypto.md) pour l'analyse détaillée de conformité.
+
 ## Questions ouvertes
 
 1. Quels PCR lier à la policy de la KEK, et qui les étend (bootloader, noyau, userspace) ?
 2. Politique de reprise en cas de changement légitime de PCR (mise à jour du bootloader) ?
 3. Bibliothèque côté Rust : `tss-esapi` (dépend de `tpm2-tss` en C) ; acceptable pour la TCB ?
 4. Émulation de test : `swtpm` ; périmètre des tests matériels (les sessions chiffrées ECDH sont-elles supportées ?).
-5. Taille de la KEK : 256-bit suffisante pour AES Key Wrap (RFC 5649), ou 128-bit acceptable pour performance sur TPM limité ?
+5. Taille de la KEK : 256-bit suffisante pour AES Key Wrap (RFC 5649), ou 128-bit acceptable pour performance sur TPM limité ? **Réponse : 256-bit est recommandé (conforme ANSSI PQ)**.
 6. Rotation de la KEK : doit-elle être renouvelable en field, ou fixe à vie ?
 7. Support TPM de `TPM2_HashSequenceStart` : tous les TPM 2.0 le supportent-ils, ou faut-il un fallback software pour le hash ?
 8. Performance du hash TPM : impact sur le temps de vérification du header (latence bus SPI/I2C) ?
