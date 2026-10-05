@@ -9,14 +9,15 @@ Ce document résume les modifications apportées à la spécification suite à l
 
 ### 1. KEK ne quitte jamais le TPM
 
-**Décision** : Suppression du fallback x3 logiciel. Le TPM cible DOIT supporter le déchiffrement AES Keywrap (RFC 5649) en interne.
+**Décision** : Le mécanisme x3 n'est plus rejeté. Il est redéfini comme un mécanisme de **policy TPM restreinte** avec 3 branches d'autorisation, où la KEK reste toujours dans le TPM.
 
 **Impact** :
-- REQ-THR-4 modifiée : la KEK ne transite jamais en clair dans la RAM
-- REQ-THR-6 supprimée (fenêtre d'exposition RAM éliminée)
-- ADR-0002, 03-tpm.md, 07-security-analysis.md mis à jour
+- REQ-THR-4 clarifiée : mentionne le mécanisme x3 comme alternative acceptable si le TPM ne supporte pas AES Keywrap
+- 03-tpm.md : nouvelle section détaillant le mécanisme x3 (policies, propriétés de sécurité, exigences)
+- 07-security-analysis.md : option 3 reclassée de "REJETÉ" à "ALTERNATIVE ACCEPTABLE"
+- ADR-0002 : mise à jour pour refléter que le mécanisme x3 est acceptable
 
-**Justification** : Le fallback x3 n'apportait pas de propriété cryptographique claire et exposait la KEK en RAM, contredisant le modèle de sécurité fondamental.
+**Justification** : Si les 3 déchiffrements sont effectués par le TPM avec une KEK non exportable, la KEK ne quitte jamais le TPM. Le mécanisme x3 n'expose donc pas la KEK en RAM. Il permet de limiter les commandes et arguments autorisés via plusieurs branches de policy TPM.
 
 ### 2. Format de bundle cryptographiquement fixé
 

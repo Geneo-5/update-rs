@@ -43,14 +43,13 @@ L'en-tête contient toutes les métadonnées nécessaires au traitement en strea
 | 24 | 4 | `chunk_count` | Nombre total de chunks |
 | 28 | 32 | `manifest_hash` | SHA-256 du manifeste signé |
 | 60 | 32 | `tree_root` | Racine de l'arbre de hachage (si applicable) |
-| 92 | 40 | `wrapped_session_key` | **AES Key Wrap (RFC 5649)** de la clé de session (Key 256-bit + IV 96-bit + overhead = 40 octets) |
-| 132 | 4 | `keywrap_alg` | `0x0001` = AES Key Wrap with Padding RFC 5649 |
-| 136 | 32 | `kek_id` | Identifiant (hash) de la KEK cible dans le TPM |
-| 168 | 32 | `bundle_id` | Identifiant unique du bundle (UUID ou hash)
-| 200 | 56 | `wrapped_session_key` | **AES Key Wrap (RFC 5649)** de la clé de session (Key 256-bit + IV 96-bit = 44 octets plaintext → 56 octets ciphertext)
-| 256 | 32 | `ecc_signature_r` | Composante r de la signature ECDSA P-256 (32 octets)
-| 288 | 32 | `ecc_signature_s` | Composante s de la signature ECDSA P-256 (32 octets)
-| 320 | 192 | `padding` | Réservé, mis à zéro |
+| 92 | 4 | `keywrap_alg` | `0x0001` = AES Key Wrap with Padding RFC 5649 |
+| 96 | 32 | `kek_id` | Identifiant (hash) de la KEK cible dans le TPM |
+| 128 | 32 | `bundle_id` | Identifiant unique du bundle (UUID ou hash) |
+| 160 | 56 | `wrapped_session_key` | **AES Key Wrap (RFC 5649)** de la clé de session (Key 256-bit + IV 96-bit = 44 octets plaintext → 56 octets ciphertext) |
+| 216 | 32 | `ecc_signature_r` | Composante r de la signature ECDSA P-256 (32 octets) |
+| 248 | 32 | `ecc_signature_s` | Composante s de la signature ECDSA P-256 (32 octets) |
+| 280 | 232 | `padding` | Réservé, mis à zéro |
 
 **Total : 512 octets** (alignement sur secteur flash)
 
@@ -70,7 +69,7 @@ L'en-tête contient toutes les métadonnées nécessaires au traitement en strea
   - La KEK (Key Encryption Key) réside de manière non exportable dans le TPM du dispositif cible (voir `03-tpm.md`) et **ne quitte jamais le TPM**. Le TPM effectue le déchiffrement AES Keywrap en interne et retourne uniquement la clé de session déballée (44 octets) via une session chiffrée.
 
 - **Signature ECC** (`ecc_signature_r` + `ecc_signature_s`) :
-  - Signature ECDSA P-256 calculée sur `SHA-256(header[0..168])` (tous les champs sauf signature et padding).
+  - Signature ECDSA P-256 calculée sur `SHA-256(header[0..216])` (tous les champs sauf signature et padding).
   - La clé publique de vérification est stockée dans le TPM (publique uniquement).
 
 ### Flux de validation
@@ -80,9 +79,9 @@ L'en-tête contient toutes les métadonnées nécessaires au traitement en strea
 3. **Vérification de taille** : `header_size` doit correspondre à la taille attendue pour cette version.
 4. **Vérification anti-rollback (version)** : `bundle_version` doit être > dernière version installée (stockée dans un index NV TPM ou fichier persistant).
 5. **Vérification anti-rollback (firmware)** : `min_firmware_version` doit être ≤ version firmware actuelle du device.
-6. **Hash du header (par le TPM)** : Le lecteur transmet le buffer du header au TPM via `TPM2_HashSequenceStart` + `SequenceUpdate` + `SequenceComplete` (mode PCR process). Le TPM calcule lui-même `SHA-256(header[0..168])`.
+6. **Hash du header (par le TPM)** : Le lecteur transmet le buffer du header au TPM via `TPM2_HashSequenceStart` + `SequenceUpdate` + `SequenceComplete` (mode PCR process). Le TPM calcule lui-même `SHA-256(header[0..216])`.
 7. **Vérification de signature ECC** : Le TPM vérifie la signature ECDSA via `TPM2_VerifySignature` sur le hash qu'il a calculé (sous session chiffrée).
-8. **Déchiffrement de la clé de session** : Le TPM satisfait la policy de la KEK et déchiffre `wrapped_session_key` (sous session chiffrée). Voir `03-tpm.md` pour le détail et le fallback avec 3 policies distinctes.
+8. **Déchiffrement de la clé de session** : Le TPM satisfait la policy de la KEK et déchiffre `wrapped_session_key` (sous session chiffrée). Voir `03-tpm.md` pour le détail du mécanisme (AES Keywrap natif ou mécanisme alternatif x3 avec policies restreintes).
 9. **Streaming** : Une fois la clé de session obtenue, le lecteur peut déchiffrer et authentifier les chunks en streaming (AEAD).
 
 ### Exigences supplémentaires

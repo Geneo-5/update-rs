@@ -42,7 +42,7 @@ Statut : Brouillon (proposition à valider)
 - **REQ-THR-1** — Un bundle modifié, tronqué, réordonné ou rejoué DOIT être rejeté.
 - **REQ-THR-2** — Un bundle ne DOIT pas être déchiffrable sans le TPM (et l'état de boot) du device visé.
 - **REQ-THR-3** — Une version inférieure au compteur anti-rollback DOIT être rejetée.
-- **REQ-THR-4** — La KEK NE DOIT JAMAIS quitter le TPM, ni même transiter en clair dans la RAM. Le TPM DOIT effectuer le déchiffrement AES Keywrap (RFC 5649) en interne et retourner uniquement la clé de session déballée. Sans AES Keywrap, le TPM est utiliser 3 fois avec un déchiffrement AES et 3 fenêtre de validation TPM avec échange chiffré.
+- **REQ-THR-4** — La KEK NE DOIT JAMAIS quitter le TPM, ni même transiter en clair dans la RAM. Le TPM DOIT effectuer le déchiffrement AES Keywrap (RFC 5649) en interne et retourner uniquement la clé de session déballée. Si le TPM ne supporte pas AES Keywrap nativement, un mécanisme alternatif x3 est acceptable : le TPM effectue 3 déchiffrements AES séparés via des policies restreintes (chaque policy limite strictement la commande et les arguments), la KEK restant toujours dans le TPM.
 - **REQ-THR-5** — Un attaquant écoutant le bus TPM (A4) NE DOIT PAS obtenir la clé de session, la KEK, ou les paramètres de commande sensibles.
 - **REQ-THR-6** — La chaîne de confiance DOIT être ancrée depuis le ROM/SoC secure boot jusqu'au TPM (bootloader vérifié → kernel vérifié → rootfs vérifié → `updated` vérifié → TPM policy/PCR).
 - **REQ-THR-7** — Tout contenu issu du bundle DOIT être traité comme **hostile** jusqu'à sa transformation en une représentation interne validée et bornée.

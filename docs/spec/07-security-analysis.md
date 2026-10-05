@@ -287,13 +287,19 @@ Ce document complète le modèle de menace (`01-threat-model.md`) en identifiant
    - ✗ Surface d'attaque augmentée
    - **REJETÉ**
    
-3. **Fallback x3 (3 policies distinctes)** :
-   - ✗ Complexité, 3x le coût de vérification
-   - ✗ N'apporte pas de propriété cryptographique claire
-   - ✗ Expose toujours la KEK en RAM
-   - **REJETÉ**
+3. **Mécanisme x3 (3 policies TPM restreintes)** :
+   - ✓ La KEK ne quitte jamais le TPM (déchiffrements effectués par le TPM)
+   - ✓ Permet de limiter les commandes et arguments autorisés via plusieurs branches de policy
+   - ✗ Complexité additionnelle (3 branches à auditer)
+   - **ALTERNATIVE ACCEPTABLE**
 
-**Décision recommandée** : Option 1 (exiger un TPM avec AES Keywrap). Si le TPM ne le supporte pas, il est rejeté lors du provisioning.
+**Décision recommandée** : Option 1 (exiger un TPM avec AES Keywrap natif) est préférée pour sa simplicité. L'option 3 (mécanisme x3) est acceptable si le TPM ne supporte pas AES Keywrap, à condition que :
+- La KEK soit non exportable
+- Chaque branche limite strictement la commande (AES decrypt) et les arguments
+- Les arguments soient contraints via `PolicyCpHash` ou mécanisme équivalent
+- Les trois branches soient explicitement documentées et auditées
+
+Si le TPM ne supporte ni AES Keywrap ni le mécanisme x3 sécurisé, il est rejeté lors du provisioning.
 
 ### 2.4 Anti-rollback : où stocker le compteur ?
 

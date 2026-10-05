@@ -34,7 +34,7 @@ La KEK a une `authPolicy` composée qui **autorise son usage en déchiffrement u
 
 ### Clé de session (AES-GCM)
 
-La clé de session (Key 256-bit + IV 96-bit) est générée côté éditeur pour chaque bundle, puis **encapsulée avec AES Key Wrap with Padding (RFC 5649)** par la KEK. Le résultat (ciphertext 40 octets pour Key+IV) est placé dans le header du bundle.
+La clé de session (Key 256-bit + IV 96-bit) est générée côté éditeur pour chaque bundle, puis **encapsulée avec AES Key Wrap with Padding (RFC 5649)** par la KEK. Le résultat (ciphertext 56 octets pour Key+IV) est placé dans le header du bundle.
 
 **Note** : RFC 5649 est préféré à RFC 3394 car il supporte des tailles arbitraires (non multiples de 8 octets). Voir [05-crypto.md](05-crypto.md).
 
@@ -77,9 +77,73 @@ La clé de session (Key 256-bit + IV 96-bit) est générée côté éditeur pour
 
 **Exigence** : le TPM cible DOIT supporter `TPM2_Duplicate` avec AES-256 ou `TPM2_Unwrap` (selon implémentation).
 
-**Vérification** : lors du provisioning, le fabricant DOIT vérifier que le TPM supporte le déchiffrement AES Keywrap en interne. Si le TPM ne le supporte pas, il DOIT être rejeté.
+**Vérification** : lors du provisioning, le fabricant DOIT vérifier que le TPM supporte le déchiffrement AES Keywrap en interne. Si le TPM ne le supporte pas, le mécanisme alternatif x3 peut être utilisé (voir ci-dessous). Si le TPM ne supporte ni l'un ni l'autre, il DOIT être rejeté.
 
 **Pas de fallback logiciel** : contrairement aux versions antérieures de cette spécification, aucun fallback logiciel n'est prévu. La KEK ne quitte jamais le TPM, et le TPM effectue le déchiffrement AES Keywrap en interne.
+
+### Mécanisme alternatif x3 : policies TPM de déchiffrement restreintes
+
+Si le TPM ne supporte pas AES Keywrap (RFC 5649) nativement, un mécanisme alternatif x3 est acceptable. Ce mécanisme n'est **pas** un fallback qui exposerait la KEK en RAM.
+
+**Principe** : La KEK est une clé symétrique non exportable stockée dans le TPM. Les opérations de déchiffrement sont réalisées à l'intérieur du TPM via une commande AES decrypt autorisée par policy. Le TPM retourne uniquement le plaintext résultant. La KEK ne quitte jamais le TPM.
+
+Le mécanisme x3 définit **trois branches d'autorisation** possibles. Chaque branche limite strictement :
+
+- la commande TPM autorisée (AES decrypt uniquement) ;
+- les arguments de la commande (via `PolicyCpHash` ou mécanisme équivalent) ;
+- éventuellement les conditions d'exécution (PCR, localité, NV index, signature).
+
+**Propriétés de sécurité** :
+
+- La KEK reste dans le TPM.
+- Aucune opération d'export, de duplication ou d'extraction de la KEK n'est autorisée.
+- Seul un déchiffrement AES autorisé peut être demandé.
+- Les arguments de la commande doivent être contraints.
+- Le plaintext déchiffré peut être retourné à `updated`.
+- Si le plaintext est une clé de session, cette clé peut se trouver en RAM dans `updated`.
+- Une compromission d'`updated` peut exposer la session key déchiffrée, mais pas la KEK.
+
+**Commande et arguments autorisés** :
+
+La policy doit au minimum garantir que la commande demandée est une commande de déchiffrement AES :
+
+```text
+TPM2_PolicyCommandCode(TPM2_CC_EncryptDecrypt2)
+```
+
+La restriction par commande seule n'est toutefois pas suffisante si l'on veut interdire le déchiffrement de blobs arbitraires. Il faut également restreindre les arguments de la commande.
+
+Une policy robuste peut utiliser :
+
+```text
+TPM2_PolicyCpHash(cpHash)
+```
+
+où `cpHash` lie cryptographiquement :
+
+- le code de commande ;
+- le nom de la clé utilisée ;
+- les paramètres de la commande ;
+- le mode de déchiffrement ;
+- l'opération demandée ;
+- l'IV ;
+- les données chiffrées d'entrée.
+
+**Risque résiduel** : Si les données chiffrées varient à chaque bundle, la spécification doit décrire comment la policy est satisfaite :
+
+- soit par trois familles d'arguments explicitement autorisées ;
+- soit par une autorisation signée, par exemple via `TPM2_PolicySigned` ou `TPM2_PolicyAuthorize` ;
+- soit par un mécanisme équivalent permettant au TPM de vérifier que le déchiffrement demandé est légitime.
+
+**Exigences spécifiques au mécanisme x3** :
+
+- REQ-TPM-X1 : la KEK doit être une clé TPM non exportable.
+- REQ-TPM-X2 : la KEK ne doit jamais être retournée en clair hors du TPM.
+- REQ-TPM-X3 : le déchiffrement doit être effectué par le TPM via une commande AES decrypt explicitement autorisée.
+- REQ-TPM-X4 : la policy doit limiter la commande autorisée (ex: `TPM2_PolicyCommandCode`).
+- REQ-TPM-X5 : la policy doit limiter les arguments de la commande (ex: `TPM2_PolicyCpHash`).
+- REQ-TPM-X6 : les trois branches x3 doivent être décrites, auditées et limitées au strict nécessaire.
+- REQ-TPM-X7 : si les arguments sont dynamiques, la méthode d'autorisation dynamique doit être spécifiée.
 
 ### Sessions chiffrées via certificat ECC du TPM
 
@@ -115,7 +179,7 @@ Le daemon de mise à jour (`updated`) DOIT tourner en tant que **root** pour pou
 - **REQ-TPM-3** — Un compteur NV monotone DOIT porter l'anti-rollback ; il n'est incrémenté qu'après validation d'une mise à jour (commit).
 - **REQ-TPM-4** — Les secrets déscellés (KEK, clé de session) DOIVENT être zeroizés après usage (`mlock` + `madvise(DONTDUMP)`) et ne jamais être swappés.
 - **REQ-TPM-5** — La KEK DOIT avoir `sign=0`, `decrypt=1`, `restricted=0` dans ses attributs `TPMA_OBJECT`.
-- **REQ-TPM-6** — Le TPM cible DOIT supporter le déchiffrement AES Keywrap (RFC 5649) en interne via `TPM2_Duplicate` ou `TPM2_Unwrap`. Si le TPM ne le supporte pas, il DOIT être rejeté lors du provisioning.
+- **REQ-TPM-6** — Le TPM cible DOIT supporter le déchiffrement AES Keywrap (RFC 5649) en interne via `TPM2_Duplicate` ou `TPM2_Unwrap`. Si le TPM ne le supporte pas, le mécanisme alternatif x3 (policies TPM restreintes) peut être utilisé. Si le TPM ne supporte ni l'un ni l'autre, il DOIT être rejeté lors du provisioning.
 - **REQ-TPM-7** — La KEK NE DOIT JAMAIS être utilisable hors de sa policy (aucun `authValue` simple ne doit permettre de contourner la policy).
 - **REQ-TPM-8** — Le daemon de mise à jour DOIT tourner en tant que root et forker un processus fils dédié à la vérification du header.
 - **REQ-TPM-9** — Le TPM DOIT calculer lui-même le hash du header via `TPM2_HashSequenceStart` + `SequenceUpdate` + `SequenceComplete` (mode PCR process). Le logiciel NE DOIT PAS calculer le hash en software.

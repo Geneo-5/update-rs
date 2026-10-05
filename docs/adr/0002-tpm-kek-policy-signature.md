@@ -62,6 +62,17 @@ Les options A (clé scellée en RAM) et B (ECDH via TPM) discutées précédemme
 - Valider que `swtpm` supporte les sessions chiffrées ECDH pour les tests.
 - Spécifier précisément la chaîne de boot pour ancrer le TPM dans une chaîne de confiance vérifiée (secure boot → bootloader → kernel → rootfs → `updated`).
 
+### Alternative : mécanisme x3
+
+Si le TPM ne supporte pas AES Keywrap (RFC 5649) nativement, un mécanisme alternatif x3 est acceptable :
+
+- Le TPM effectue 3 déchiffrements AES séparés via des policies restreintes
+- Chaque policy limite strictement la commande (AES decrypt) et les arguments
+- La KEK reste toujours dans le TPM (non exportable)
+- Les arguments sont contraints via `PolicyCpHash` ou mécanisme équivalent
+
+Voir `docs/spec/03-tpm.md` section "Mécanisme alternatif x3" pour les détails.
+
 ## Références
 
 - Spécification : [`docs/spec/03-tpm.md`](../spec/03-tpm.md), [`docs/spec/02-bundle-format.md`](../spec/02-bundle-format.md).
