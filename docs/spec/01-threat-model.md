@@ -2,6 +2,9 @@
 
 Statut : Brouillon (proposition à valider)
 
+> **Note** : Une analyse de sécurité approfondie est disponible dans [07-security-analysis.md](07-security-analysis.md).
+> Elle identifie des scénarios d'attaque additionnels, des points à clarifier, et les recommandations du guide Rust ANSSI applicables.
+
 ## Actifs
 
 - Intégrité et authenticité du logiciel installé sur le device.

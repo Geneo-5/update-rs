@@ -47,18 +47,21 @@ au début de la séquence, puis se déprivilégie avant d'exécuter le script d'
 
 1. **Base `tmpfs`** : la racine du jail est un `tmpfs` monté dans un nouveau namespace
    `mount`. Rien n'atteint le disque hôte sans bind mount explicite.
-2. **Isolation par namespaces** : `mount`, `pid`, `ipc`, `uts`, `cgroup`, `user` (optionnel).
-   `net` est soit partagé (payload réseau), soit isolé selon la politique du bundle.
+2. **Isolation par namespaces** : `mount`, `cgroup`, `uts`, `ipc`, **`net` (toujours isolé)**.
+   `CLONE_NEWUSER` et `CLONE_NEWPID` ne sont PAS utilisés (voir section « Choix de design »).
 3. **Bind mounts du host** : fichiers ou répertoires nécessaires au payload (ex:
    `/etc/resolv.conf`, `/run/dbus/system_bus_socket`, un socket UNIX) sont montés dans
-   le jail en `ro` par défaut.
+   le jail en **`ro` par défaut** avec le flag **`MS_NOSYMFOLLOW`** pour empêcher les attaques
+   par symlink.
 4. **Chargement depuis le payload** : les fichiers extraits du bundle sont placés dans le
    jail au fil du déchiffrement (streaming).
-5. **Nœuds de périphériques** : `/dev` est partiellement peuplé via `devtmpfs` + création
-   manuelle de `chrdev` / `blkdev` nécessaires au payload.
+5. **Nœuds de périphériques** : `/dev` est partiellement peuplé via création manuelle de
+   `chrdev` / `blkdev` nécessaires au payload (pas de `devtmpfs` complet).
 6. **Verrouillage final** : tous les points de montage internes sont remontés `ro,
    nodev, nosuid, noexec` ; les namespaces sont figés ; l'entrypoint est lancé avec un
-   profil de sécurité minimal.
+   profil de sécurité minimal (capabilities + securebits + seccomp).
+7. **Pas d'écriture sur l'hôte** : le jail NE PEUT PAS écrire sur l'hôte, sauf via des
+   bind mounts inversés (`host_bind_back`) explicitement autorisés pour les logs uniquement.
 
 ## Phases d'exécution
 
@@ -72,10 +75,12 @@ au début de la séquence, puis se déprivilégie avant d'exécuter le script d'
                               ↓
 ┌────────────────────────────────────────────────────────────────┐
 │ Phase 1 : Préparation (unshare)                                │
-│  - unshare(CLONE_NEWNS | CLONE_NEWPID | CLONE_NEWIPC |         │
-│            CLONE_NEWUTS | CLONE_NEWCGROUP)                     │
+│  - unshare(CLONE_NEWNS | CLONE_NEWIPC | CLONE_NEWUTS |         │
+│            CLONE_NEWCGROUP | CLONE_NEWNET)                     │
 │  - pivot_root() non fait ici (tmpfs d'abord)                   │
 │  - montage tmpfs sur le répertoire de travail                  │
+│  - **Pas de CLONE_NEWPID** (voir section « Choix de design »)  │
+│  - **Pas de CLONE_NEWUSER** (daemon root nécessaire)           │
 └────────────────────────────────────────────────────────────────┘
                               ↓
 ┌────────────────────────────────────────────────────────────────┐
@@ -93,7 +98,13 @@ au début de la séquence, puis se déprivilégie avant d'exécuter le script d'
 │  - remount ro,nosuid,nodev,noexec de tous les points           │
 │  - pivot_root() dans le tmpfs (l'ancien root devient privé)    │
 │  - déprivilégiation : setgroups, setresgid, setresuid          │
+│  - **Securebits stricts** :                                    │
+│    - SECBIT_NOROOT + SECBIT_NOROOT_LOCKED                     │
+│    - SECBIT_NO_SETUID_FIXUP + SECBIT_NO_SETUID_FIXUP_LOCKED   │
+│    - SECBIT_KEEP_CAPS_LOCKED                                   │
+│    - SECBIT_NO_CAP_AMBIENT_RAISE + LOCKED                      │
 │  - drop de toutes les capabilities non listées (keep_caps=0)   │
+│  - **Clear ambient caps** : PR_CAP_AMBIENT_CLEAR_ALL           │
 │  - application du filtre seccomp (BPF)                         │
 │  - no_new_privs = 1                                            │
 └────────────────────────────────────────────────────────────────┘
@@ -112,7 +123,61 @@ au début de la séquence, puis se déprivilégie avant d'exécuter le script d'
 │  - sortie des namespaces (exit du processus monteur)           │
 │  - retour à Idle (voir 04-update-flow.md)                      │
 └────────────────────────────────────────────────────────────────┘
+
+**Nettoyage sur signal** :
+- Les signaux `SIGTERM`, `SIGINT`, `SIGHUP` déclenchent un cleanup immédiat.
+- Le processus monteur installe un handler qui :
+  1. Envoie `SIGKILL` au processus jail (via son PID).
+  2. Attend la fin du fils (`waitpid`).
+  3. Démonte récursivement tous les mounts.
+  4. Libère le tmpfs.
+  5. Termine avec un code d'erreur approprié.
+- **Pas de dépendance à systemd** : le cleanup est géré par le daemon lui-même.
 ```
+
+## Choix de design
+
+### Pourquoi pas `CLONE_NEWUSER` ?
+
+- Le daemon `updated` DOIT tourner en tant que **root** pour pouvoir :
+  - Accéder au TPM (`/dev/tpm0`, `/dev/tpmrm0`)
+  - Monter/démonter des filesystems
+  - Écrire sur les devices MTD/block pour l'update
+  - Créer des namespaces
+- `CLONE_NEWUSER` nécessite que le daemon soit non-root pour mapper les UIDs, ce qui est incompatible avec notre architecture.
+- Le jail utilise `setresuid`/`setresgid` pour déprivilégier le processus fils avant `execve`, ce qui est suffisant pour notre cas d'usage (payload éphémère).
+
+### Pourquoi pas `CLONE_NEWPID` ?
+
+- Enbox n'utilise pas `CLONE_NEWPID` car il nécessite de gérer la logique `init` (processus PID 1 dans le namespace).
+- Pour notre cas d'usage (payload éphémère exécutant un script), un simple `waitpid` suffit pour attendre la fin du jail.
+- Le timeout est géré par un `timer_create` + `SIGALRM` qui envoie `SIGKILL` au processus jail.
+- Si le processus jail fork des enfants, ils sont tués automatiquement quand le père (monteur) termine (process group leader).
+
+### Pourquoi `CLONE_NEWNET` (réseau isolé) ?
+
+- Le payload d'update n'a **jamais** besoin d'accès réseau : tout est déjà téléchargé dans le bundle.
+- Isoler le réseau empêche toute exfiltration de données ou attaque sur des services internes.
+- Si un futur cas d'usage nécessite le réseau, il faudra ajouter un firewalling dédié (nftables) et une policy TPM spécifique.
+
+### Pourquoi `MS_NOSYMFOLLOW` sur les bind mounts ?
+
+- Empêche les attaques par symlink : un attaquant ne peut pas créer un symlink `/jail/etc/passwd -> /etc/shadow` pour exposer des fichiers sensibles de l'hôte.
+- Tous les bind mounts host→jail DOIVENT utiliser ce flag.
+- Disponible depuis Linux 5.10 (flag `MS_NOSYMFOLLOW` = `1 << 8`).
+
+### Pourquoi les securebits stricts ?
+
+Inspiré d'enbox, les securebits suivants sont verrouillés :
+
+| Securebit | Effet |
+|---|---|
+| `SECBIT_NOROOT` | Empêche le kernel d'accorder les capacités root lors d'un `execve` de binaire setuid root |
+| `SECBIT_NO_SETUID_FIXUP` | Empêche le kernel d'ajuster les capacités lors d'un changement d'UID effectif |
+| `SECBIT_KEEP_CAPS_LOCKED` | Empêche de conserver les capacités lors d'un changement d'UID (sauf si explicitement demandé) |
+| `SECBIT_NO_CAP_AMBIENT_RAISE` | Empêche de lever des capacités ambient (qui survivent à `execve`) |
+
+Ces bits sont **verrouillés** (suffix `_LOCKED`) pour empêcher le processus jail de les désactiver.
 
 ## Manifeste du jail (JailManifest)
 
@@ -180,13 +245,13 @@ group = 0
 type = "host_bind"             # bind mount depuis l'hôte
 path = "/etc/resolv.conf"
 orig = "/etc/resolv.conf"
-flags = ["ro", "nodev", "nosuid", "noexec"]
+flags = ["ro", "nodev", "nosuid", "noexec", "nosymfollow"]
 
 [[jail.fsset]]
 type = "host_bind"
 path = "/run/dbus/system_bus_socket"
 orig = "/run/dbus/system_bus_socket"
-flags = ["ro", "nodev", "nosuid", "noexec"]
+flags = ["ro", "nodev", "nosuid", "noexec", "nosymfollow"]
 
 [[jail.fsset]]
 type = "payload_file"          # fichier extrait du bundle
@@ -277,10 +342,11 @@ menaces locales suivantes :
 | J2 | Device node malicieux donnant accès à un device sensible | Nœuds créés uniquement via `fsset` validé par signature du manifeste ; `major`/`minor` validés contre liste blanche |
 | J3 | `proc`/`sys` en écriture permettant escalade | Options `ro,nosuid,nodev,noexec` obligatoires ; `hidepid=invisible` pour `proc` |
 | J4 | Seccomp contourné par un binaire du payload | Filtre installé **après** pivot_root, `no_new_privs=1` empêchant tout `setuid` ou `execve` vers des binaires privilégiés |
-| J5 | Capabilities conservées après execve | `SECBIT_KEEP_CAPS=0`, `keep_caps=0` sur execve |
+| J5 | Capabilities conservées après execve | `SECBIT_KEEP_CAPS=0`, `keep_caps=0` sur execve, `PR_CAP_AMBIENT_CLEAR_ALL` |
 | J6 | Fuite de données du payload via bind mount inversé | `host_bind_back` limité à des zones spécifiques (logs) ; contenu validé après exécution |
-| J7 | Processus orphelin gardant des ressources | PID namespace isolé ; `init` du PID namespace tue les orphelins à la sortie |
+| J7 | Processus orphelin gardant des ressources | Pas de PID namespace ; le processus monteur attend le jail via `waitpid` et envoie `SIGKILL` sur timeout |
 | J8 | Race condition entre démontage et sortie | `MNT_DETACH` suivi de la sortie du monteur ; le tmpfs disparaît au dernier close |
+| J9 | Attaque par symlink sur bind mount | Flag `MS_NOSYMFOLLOW` obligatoire sur tous les bind mounts host→jail |
 
 ### Posture par défaut
 

@@ -14,6 +14,7 @@ document a un **statut** en tête de fichier (`Brouillon` → `En revue` → `St
 | [spec/04-update-flow.md](spec/04-update-flow.md) | Machine à états, A/B, rollback | Brouillon |
 | [spec/05-crypto.md](spec/05-crypto.md) | Primitives et bibliothèques (AES-GCM, AES Keywrap, ECDSA P-256 via TPM, Ed25519/ML-DSA) | Brouillon |
 | [spec/06-jail.md](spec/06-jail.md) | Environnement d'exécution sandboxé du payload (tmpfs, namespaces, fsset, seccomp) | Brouillon |
+| [spec/07-security-analysis.md](spec/07-security-analysis.md) | Analyse de sécurité approfondie : scénarios d'attaque, points à clarifier, guide Rust ANSSI | Brouillon |
 | [adr/](adr/) | Décisions d'architecture (une par fichier) | — |
 
 ## Conventions
