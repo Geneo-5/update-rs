@@ -20,14 +20,14 @@ Un format dédié est retenu (voir [ADR-0001](../adr/0001-custom-bundle-format.m
 ## Structure
 
 ```
-[ en-tête (header) ][ manifeste signé ][ chunk 0 ][ chunk 1 ] … [ chunk N (final) ]
+[ en-tête (header) ][ manifeste chiffré ][ chunk 0 ][ chunk 1 ] … [ chunk N (final) ]
 ```
 
 L'en-tête a une **taille fixe** (padding éventuel) pour permettre un traitement en streaming sans prélecture coûteuse.
 
 ### Composition de l'en-tête (Header)
 
-L'en-tête contient toutes les métadonnées nécessaires au traitement en streaming et à la vérification initiale. Il est intégralement couvert par une signature ECC (ECDSA P-256 sur SHA-256(header)).
+L'en-tête contient toutes les métadonnées nécessaires au traitement en streaming et à la vérification initiale. Tous ses champs, à l'exception de la signature et du padding, sont couverts par une signature ECC (ECDSA P-256 sur `SHA-256(header[0..216])`). Le padding n'est pas signé : le lecteur DOIT vérifier qu'il est entièrement à zéro.
 
 #### Structure binaire (esquisse, taille fixe 512 octets)
 
@@ -119,7 +119,7 @@ Chaque chunk est chiffré/authentifié individuellement avec **AES-256-GCM-SIV**
 ```
 Plaintext:    chunk_data (taille variable, ≤ chunk_size)
 Key:          session_key[0..32] (32 octets)
-Nonce:        dérivé de (bundle_id, chunk_index, chunk_count, is_last_chunk)
+Nonce:        dérivé par HKDF-SHA256 de (session_key, bundle_id, chunk_index) — voir ci-dessous
 AAD:          bundle_id || chunk_index || chunk_count || is_last_chunk || chunk_data_length
 Ciphertext:   encrypted_chunk || auth_tag (16 octets)
 ```
@@ -186,3 +186,7 @@ Voir [05-crypto.md](05-crypto.md) pour l'analyse détaillée de conformité.
 4. Chiffrement : une clé de contenu par bundle encapsulée pour N destinataires ?
 5. Représentation du manifeste (CBOR, TLV, autre) ; alignement avec IETF SUIT (RFC 9124) ?
 6. Taille de chunk, et bornes maximales acceptées par le lecteur.
+7. Champ `tree_root` : l'authentification des chunks reposant sur la chaîne AEAD (voir ci-dessus), le champ est-il conservé (arbre de hachage) ou retiré du header ?
+8. Paramètres AEAD du manifeste (nonce, AAD) : le manifeste est-il le chunk d'indice 0 ou une structure distincte ? Non spécifié à ce stade.
+9. L'IV de 12 octets embarqué dans la clé de session (44 octets) n'est pas utilisé par la dérivation de nonce des chunks : le retirer (clé de 32 octets, `wrapped_session_key` de 40 octets) ou préciser son rôle ?
+10. Emplacement des signatures Ed25519 + ML-DSA évoquées dans [05-crypto.md](05-crypto.md) : le header n'embarque que la signature ECDSA P-256 (vérifiée par le TPM). Ces signatures sont-elles les « signatures internes » du manifeste ?

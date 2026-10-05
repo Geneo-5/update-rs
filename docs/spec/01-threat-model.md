@@ -24,7 +24,7 @@ Statut : Brouillon (proposition à valider)
 | A2 | Détenteur d'un bundle | Possède le fichier, tente de le lire ou de le modifier |
 | A3 | Accès physique au stockage | Extrait ou modifie la flash hors tension |
 | A4 | Accès physique au bus TPM | Écoute ou rejoue des commandes SPI/I2C (atténué par sessions chiffrées) |
-| A5 | Rollback | Fait installer une version ancienne, validement signée, mais vulnérable |
+| A5 | Rollback | Fait installer une version ancienne, valablement signée, mais vulnérable |
 | A6 | Compromission logicielle partielle | Contrôle le processus utilisateur pendant la mise à jour, tente d'exploiter la fenêtre TOCTOU entre vérification de signature et déchiffrement |
 | A7 | Réutilisation de header | Tente de rejouer un header valide avec un payload différent (atténué par binding hash manifeste) |
 | A8 | Bundle cross-device | Tente d'installer un bundle signé pour un autre dispositif (atténué par `kek_id` + policy PCR) |
@@ -32,7 +32,9 @@ Statut : Brouillon (proposition à valider)
 ## Hors périmètre (à valider)
 
 - Compromission root **après** le boot : le TPM ne l'empêche pas d'invoquer la logique de
-  mise à jour.
+  mise à jour. Ce risque n'est pas traité par le TPM seul mais uniquement en défense en
+  profondeur (voir A9 dans [07-security-analysis.md](07-security-analysis.md) et SS3 dans
+  [EBIOS-RM-analysis.md](../EBIOS-RM-analysis.md)).
 - Attaques par canaux auxiliaires sur le SoC.
 - Compromission de la clé de signature côté éditeur (traité par l'organisation des clés,
   pas par ce projet).
@@ -106,6 +108,5 @@ Le **worker** peut être très fortement sandboxé. Le **supervisor** conserve l
 
 1. Les bundles sont-ils par appareil, par famille d'appareils, ou pour toute la flotte ?
 2. Faut-il la résistance à un attaquant post-quantique « store now, decrypt later » sur la confidentialité ?
-3. Quel niveau de protection du bus TPM (sessions chiffrées obligatoires — décidé, voir `03-tpm.md`) ?
-4. Que se passe-t-il si l'EK/AK du TPM est compromise (root of trust hardware) ?
-5. Quel bootloader (U-Boot) et quel mécanisme de secure boot pour ancrer la chaîne de confiance jusqu'au TPM ?
+3. Que se passe-t-il si l'EK/AK du TPM est compromise (root of trust hardware) ?
+4. Quel bootloader (U-Boot) et quel mécanisme de secure boot pour ancrer la chaîne de confiance jusqu'au TPM ?

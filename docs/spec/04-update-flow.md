@@ -13,7 +13,7 @@ Idle → AcquiringLock → Fetching → Verifying → PreparingJail → Assembli
 ### États détaillés
 
 - **AcquiringLock** : tentative d'acquisition du verrou (file lock ou lock file) pour éviter les instances multiples.
-- **LockHeld** : verrou acquis, prêt à démarrer une mise à jour.
+- **LockHeld** : verrou déjà détenu par une autre instance ; le daemon journalise l'erreur et termine (voir « Verrouillage d'instance »). Si le verrou est obtenu, l'état suivant est **Fetching**.
 - **Fetching** : récupération du bundle (réseau, stockage local) en streaming.
 - **Verifying** : **fork d'un processus fils** pour validation du header (magic, version, anti-rollback, hash TPM, signature ECC, déchiffrement clé de session via TPM). Le fils retourne la clé de session au père via pipe sécurisé, puis se termine.
 - **PreparingJail** : `unshare` des namespaces, montage du tmpfs racine.
@@ -48,11 +48,11 @@ Idle → AcquiringLock → Fetching → Verifying → PreparingJail → Assembli
 fn handle_signal(sig: Signal) {
     match sig {
         SIGTERM | SIGINT | SIGHUP => {
-            // 1. Envoyer SIGKILL au processus jail (si en cours)
-            // 2. Démonter récursivement tous les mounts
-            // 3. Libérer le tmpfs
-            // 4. Libérer le lock file
-            // 5. Terminer avec code d'erreur
+            // Opérations async-signal-safe uniquement :
+            // 1. Positionner le flag atomique CLEANUP_REQUESTED
+            // 2. Envoyer SIGKILL au processus jail (si en cours)
+            // Le cleanup (démontage récursif, tmpfs, lock file, code de sortie)
+            // est effectué par le thread principal, hors du handler (voir 06-jail.md).
         }
         SIGCHLD => {
             // Récupérer le statut du fils (waitpid)
@@ -68,7 +68,7 @@ fn handle_signal(sig: Signal) {
 **Cleanup garanti** :
 - Le handler de signal est installé dès l'acquisition du verrou.
 - En cas de crash (SIGSEGV, SIGABRT), le lock file est libéré automatiquement par le kernel.
-- Les mounts orphelins (tmpfs, bind mounts) sont nettoyés au prochain boot par `systemd-tmpfiles --remove` (si systemd présent) ou par un script de boot dédié.
+- Les mounts orphelins (tmpfs, bind mounts) sont nettoyés au démarrage suivant par `updated --cleanup`, lancé par le système d'init (service systemd si présent, sinon script de boot dédié) ; voir [06-jail.md](06-jail.md), « Cleanup garanti après crash ».
 
 ## Exigences
 
@@ -92,3 +92,4 @@ fn handle_signal(sig: Signal) {
 5. Déclenchement : pull périodique, push, commande manuelle (`updatectl`) ?
 6. Persistance de l'état du jail entre exécutions : le jail peut-il laisser des artefacts sur l'hôte (fichiers de config, clés) ? Si oui, dans quelle zone ?
 7. Rollback après échec du jail : faut-il pouvoir relancer un jail précédent, ou retourner à Idle ?
+8. La machine à états décrit l'exécution d'un payload dans un jail, alors que REQ-FLW-1 à 3 supposent un modèle A/B (slot inactif, health-check, rollback) absent des états ci-dessus. Les deux modèles sont-ils combinés (le jail écrit dans le slot inactif, voir ADR-0003) et quels états ajouter (écriture du slot, commit, rollback) ?

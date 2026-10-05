@@ -16,6 +16,8 @@ document a un **statut** en tête de fichier (`Brouillon` → `En revue` → `St
 | [spec/06-jail.md](spec/06-jail.md) | Environnement d'exécution sandboxé du payload (tmpfs, namespaces, fsset, seccomp) | Brouillon |
 | [spec/07-security-analysis.md](spec/07-security-analysis.md) | Analyse de sécurité approfondie : scénarios d'attaque, points à clarifier, guide Rust ANSSI | Brouillon |
 | [adr/](adr/) | Décisions d'architecture (une par fichier) | — |
+| [EBIOS-RM-analysis.md](EBIOS-RM-analysis.md) | Analyse de risque EBIOS Risk Manager (ateliers 1 à 5, plan de traitement) | Brouillon |
+| [CHANGES-security-review.md](CHANGES-security-review.md) | Journal des modifications issues de la revue de sécurité du 2026-10-06 | — |
 
 ## Conventions
 

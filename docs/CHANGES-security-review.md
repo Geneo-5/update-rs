@@ -189,14 +189,14 @@ Bundle demande → POLICY (machine) → allowed? → jail ou reject
 - Offset 232 : padding (280 octets)
 
 **Après** :
-- Offset 92 : tree_root (32 octets) [inchangé]
-- Offset 132 : keywrap_alg (4 octets) [inchangé]
-- Offset 136 : kek_id (32 octets) [inchangé]
-- Offset 168 : bundle_id (32 octets) [nouveau]
-- Offset 200 : wrapped_session_key (56 octets) [déplacé et agrandi]
-- Offset 256 : ecc_signature_r (32 octets) [déplacé]
-- Offset 288 : ecc_signature_s (32 octets) [déplacé]
-- Offset 320 : padding (192 octets) [réduit]
+- Offset 60 : tree_root (32 octets) [inchangé]
+- Offset 92 : keywrap_alg (4 octets) [déplacé, était à 132]
+- Offset 96 : kek_id (32 octets) [déplacé, était à 136]
+- Offset 128 : bundle_id (32 octets) [nouveau]
+- Offset 160 : wrapped_session_key (56 octets) [déplacé et agrandi, était à 92 (40 octets)]
+- Offset 216 : ecc_signature_r (32 octets) [déplacé]
+- Offset 248 : ecc_signature_s (32 octets) [déplacé]
+- Offset 280 : padding (232 octets) [réduit]
 
 **Justification** : Ajout de `bundle_id` pour l'AAD structurée des chunks, et correction de la taille de `wrapped_session_key`.
 
@@ -205,7 +205,7 @@ Bundle demande → POLICY (machine) → allowed? → jail ou reject
 **Avant** : Description vague de `TPM2_VerifySignature` établissant directement la relation.
 
 **Après** : Séquence détaillée :
-1. Pré-calcul de la policy digeste lors du provisioning
+1. Pré-calcul du digest de policy lors du provisioning
 2. Signature de la policy par l'éditeur
 3. Vérification runtime par le TPM via `TPM2_VerifySignature`
 
@@ -226,7 +226,7 @@ Bundle demande → POLICY (machine) → allowed? → jail ou reject
    - REQ-BUN-12, 13, 14 ajoutées
 
 3. **docs/spec/03-tpm.md**
-   - Suppression du fallback x3
+   - Suppression du fallback logiciel (le mécanisme x3, TPM-only, reste une alternative acceptable)
    - Mécanisme PolicyAuthorize détaillé
    - Support TPM de AES Keywrap précisé
    - REQ-TPM-6, 10, 11 mises à jour/ajoutées
@@ -246,26 +246,41 @@ Bundle demande → POLICY (machine) → allowed? → jail ou reject
    - Limites de ressources (cgroups) ajoutées
    - Cleanup garanti après crash ajouté
    - Signal handlers async-signal-safe précisés
-   - Surface d'attaque mise à jour (J10, J11 ajoutés)
+   - Surface d'attaque mise à jour (JS10, JS11 ajoutés)
 
 6. **docs/spec/07-security-analysis.md**
    - A9 : mitigations mises à jour (supervisor/worker, CUP)
-   - Section 2.3 : fallback x3 supprimé, support TPM AES Keywrap précisé
+   - Section 2.3 : fallback logiciel supprimé, mécanisme x3 reclassé en alternative acceptable, support TPM AES Keywrap précisé
    - Questions ouvertes mises à jour
 
 7. **docs/adr/0002-tpm-kek-policy-signature.md**
-   - Suppression du fallback x3
+   - Suppression du fallback logiciel (le mécanisme x3, TPM-only, reste une alternative acceptable)
    - RFC 3394 → RFC 5649
    - Taille wrapped_session_key corrigée (40 → 56 octets)
    - Justification mise à jour (KEK ne quitte jamais le TPM)
    - Références mises à jour
+
+## Relecture de cohérence (2026-10-06)
+
+Corrections apportées après relecture croisée des spécifications, des ADR et de l'analyse EBIOS :
+
+- offsets du header alignés sur `02-bundle-format.md` (la liste « Après » de la section précédente était erronée) ;
+- le « fallback x3 » n'est pas supprimé : seul le fallback **logiciel** l'est ; le mécanisme x3 (TPM-only) reste une alternative acceptable (`03-tpm.md`, REQ-TPM-X1 à X7) ;
+- dérivation des nonces de chunks : HKDF-SHA256, `05-crypto.md` aligné sur `02-bundle-format.md` ;
+- handler de signaux de `04-update-flow.md` aligné sur `06-jail.md` (flag atomique, cleanup hors du handler) ;
+- `host_bind_back` retiré de `06-jail.md` et de l'ADR-0003 (remplacé par l'API de sortie contrôlée) ;
+- namespaces du `JailManifest` alignés sur le choix documenté (réseau isolé, ni PID ni user) ; l'arbitrage `CLONE_NEWPID` / `CLONE_NEWUSER` reste ouvert (`07-security-analysis.md` § 2.5 et 2.6) ;
+- identifiants de menaces du jail dédoublonnés : J1–J4 (`01`), JS1–JS11 (`06`), JE1–JE6 (`07`) ;
+- EBIOS : mesures « implémentées » reformulées en « spécifiées » (les crates sont des squelettes) ; signature du header corrigée (ECDSA P-256 vérifiée par le TPM) ;
+- points signalés à vérifier dans `03-tpm.md` (questions 5, 13 et 14) : commande TPM réalisant AES-KW, lien entre `PolicyAuthorize` et la signature du header, clé de salage des sessions (EK ou SRK, pas AK).
 
 ## Questions ouvertes restantes
 
 1. Quel bootloader (U-Boot) et quel mécanisme de secure boot pour ancrer la chaîne de confiance jusqu'au TPM ?
 2. Comment mesurer et étendre les PCRs pour le bootloader, kernel, et rootfs ?
 3. Politique de rollback du compteur NV : comment empêcher un attaquant de faire revenir le compteur en arrière ?
-4. AES-GCM-SIV : nonce dérivé de manière déterministe (HKDF) ou aléatoire (CSPRNG) ?
+4. Rôle de l'IV de 12 octets de la clé de session (inutilisé par la dérivation HKDF des nonces, voir `02-bundle-format.md`) ?
+5. Quelle commande TPM réalise le déballage de la clé de session (voir l'avertissement de `03-tpm.md`) ?
 
 ## Prochaines étapes recommandées
 
@@ -282,7 +297,7 @@ Bundle demande → POLICY (machine) → allowed? → jail ou reject
    - L'intégration TPM (PolicyAuthorize, sessions chiffrées)
 
 5. **Documentation** : Créer un guide de déploiement spécifiant :
-   - Les exigences TPM (support AES Keywrap obligatoire)
+   - Les exigences TPM (support AES Keywrap natif, ou mécanisme x3)
    - La configuration de la chaîne de boot secure
    - La configuration de la policy machine
    - Les limites de ressources recommandées

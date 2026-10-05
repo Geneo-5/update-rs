@@ -4,9 +4,9 @@ Système de mise à jour pour plateforme embarquée (type SolidRun Clearfog), é
 
 Objectifs :
 
-- authenticité et confidentialité du payload, ancrées dans un TPM 2.0 ;
+- authenticité et confidentialité du payload, ancrées dans un TPM 2.0 (révision 1.38 de la spécification TCG) ;
 - format d'archive de mise à jour **streamable** à la récupération (créée offline) ;
-- cross-compilation vers la Clearfog Pro (ARMv7, `armv7-unknown-linux-gnueabihf`) ;
+- cross-compilation vers la cible principale, la Clearfog Pro (ARMv7, `armv7-unknown-linux-gnueabihf`) ;
 - primitives cryptographiques issues des mêmes bibliothèques que les projets GitHub de l'ANSSI.
 
 > Statut : spécification en cours de rédaction. Voir [`docs/`](docs/README.md).
@@ -29,7 +29,8 @@ cargo build --workspace
 cargo clippy --workspace --all-targets
 cargo test --workspace
 
-# Cross-compilation (gcc-arm-linux-gnueabihf requis)
+# Cross-compilation (gcc-arm-linux-gnueabihf requis ; les binaires ARMv7 s'exécutent via
+# qemu-arm, voir .cargo/config.toml)
 cargo build --workspace --target armv7-unknown-linux-gnueabihf
 ```
 

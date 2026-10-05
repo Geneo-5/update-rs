@@ -56,7 +56,9 @@ Ce document complète le modèle de menace (`01-threat-model.md`) en identifiant
 
 ### 1.2 Attaques sur le jail et le payload
 
-#### J5 — Attaque par évasion via device nodes
+Identifiants `JE*` (jail, évasion), distincts des menaces J1 à J4 de [01-threat-model.md](01-threat-model.md) et de la surface d'attaque `JS1`–`JS11` de [06-jail.md](06-jail.md).
+
+#### JE1 — Attaque par évasion via device nodes
 **Description** : Le manifeste peut demander la création de device nodes dangereux :
 - `/dev/mem`, `/dev/kmem` : accès mémoire physique
 - `/dev/port` : accès ports I/O
@@ -70,7 +72,7 @@ Ce document complète le modèle de menace (`01-threat-model.md`) en identifiant
 - **NOUVEAU** : Refuser les device nodes avec major < 10 (réservés aux périphériques critiques)
 - **NOUVEAU** : Logger tous les device nodes créés pour audit
 
-#### J6 — Attaque par évasion via bind mounts récursifs
+#### JE2 — Attaque par évasion via bind mounts récursifs
 **Description** : Un bind mount récursif (`MS_REC`) peut monter `/` entier dans le jail, exposant tout le système hôte.
 
 **Mitigations proposées** :
@@ -79,7 +81,7 @@ Ce document complète le modèle de menace (`01-threat-model.md`) en identifiant
 - **NOUVEAU** : Utiliser `MS_BIND | MS_NOSYMFOLLOW | MS_RDONLY` par défaut (read-only obligatoire)
 - **NOUVEAU** : Si bind mount RW nécessaire, exiger justification explicite dans le manifeste et logger
 
-#### J7 — Attaque par évasion via `/proc` et `/sys`
+#### JE3 — Attaque par évasion via `/proc` et `/sys`
 **Description** : Même montés en RO, certains fichiers de `/proc` et `/sys` peuvent être dangereux :
 - `/proc/sys/kernel/core_pattern` : peut être utilisé pour exécuter du code via core dump
 - `/proc/sysrq-trigger` : reboot/halt immédiat
@@ -92,7 +94,7 @@ Ce document complète le modèle de menace (`01-threat-model.md`) en identifiant
 - **NOUVEAU** : Utiliser `mount --bind /dev/null /proc/sysrq-trigger` pour masquer sysrq
 - **NOUVEAU** : Ne pas monter `/sys` du tout si non nécessaire, sinon monter en `ro,nodev,noexec,nosuid` et masquer les sous-répertoires dangereux avec bind mounts sur `/dev/null`
 
-#### J8 — Attaque par évasion via pivot_root mal configuré
+#### JE4 — Attaque par évasion via pivot_root mal configuré
 **Description** : Si `pivot_root` n'est pas fait correctement, l'ancien root peut rester accessible dans le jail.
 
 **Mitigations proposées** :
@@ -100,7 +102,7 @@ Ce document complète le modèle de menace (`01-threat-model.md`) en identifiant
 - **NOUVEAU** : Vérifier que `chdir("/")` a été fait avant `pivot_root`
 - **NOUVEAU** : Logger le succès de `pivot_root` et vérifier que `/` est bien le nouveau root
 
-#### J9 — Attaque par évasion via environment variables
+#### JE5 — Attaque par évasion via environment variables
 **Description** : Le processus jail peut hériter de variables d'environnement dangereuses :
 - `LD_PRELOAD`, `LD_LIBRARY_PATH` : injection de bibliothèques
 - `PATH` : exécution de binaires malveillants
@@ -112,7 +114,7 @@ Ce document complète le modèle de menace (`01-threat-model.md`) en identifiant
 - **NOUVEAU** : Si variables nécessaires, les passer via le manifeste et les définir explicitement
 - **NOUVEAU** : Ne jamais hériter de l'environnement du daemon
 
-#### J10 — Attaque par évasion via file descriptors
+#### JE6 — Attaque par évasion via file descriptors
 **Description** : Le processus jail peut hériter de file descriptors ouverts :
 - Sockets réseau (si daemon avait des connexions)
 - Fichiers sensibles (`/etc/shadow`, `/etc/passwd`)
@@ -158,7 +160,7 @@ Ce document complète le modèle de menace (`01-threat-model.md`) en identifiant
 
 **Mitigations proposées** :
 - **NOUVEAU** : Valider tous les noms de fichiers (pas de `..`, pas de `/` absolu, pas de caractères spéciaux)
-- **NOUVEAU** : Canonicaliser les chemins avec `realpath` et vérifier qu'ils restent dans le jail root
+- **NOUVEAU** : Résoudre les chemins avec `openat2()` + `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS` (pas de `realpath` suivi d'un `open`, sujet aux TOCTOU ; voir [06-jail.md](06-jail.md))
 - **NOUVEAU** : Refuser les symlinks dans le payload (ou les résoudre et vérifier la cible)
 - **NOUVEAU** : Limiter la longueur des noms (ex: 255 chars max)
 
@@ -209,8 +211,8 @@ Ce document complète le modèle de menace (`01-threat-model.md`) en identifiant
 - Chunks d'un troisième bundle valide
 
 **Mitigations proposées** :
-- **NOUVEAU** : Le manifeste DOIT inclure le hash du header (binding)
-- **NOUVEAU** : Chaque chunk DOIT inclure le hash du manifeste (binding)
+- **Traité** ([02-bundle-format.md](02-bundle-format.md)) : le header signé contient `manifest_hash` et `bundle_id` ; le lien manifeste → header est donc porté par la signature du header (un hash du header dans le manifeste serait circulaire)
+- **Traité** : l'AAD de chaque chunk inclut `bundle_id` (signé dans le header), `chunk_index`, `chunk_count`, `is_last_chunk` et `chunk_data_length`
 - **NOUVEAU** : Vérifier la chaîne de confiance : header → manifeste → chunks
 
 ---
@@ -270,7 +272,7 @@ Ce document complète le modèle de menace (`01-threat-model.md`) en identifiant
 **Question** : Que faire si le TPM ne supporte pas AES Keywrap nativement ?
 
 **Analyse** :
-- RFC 5649 (AES Key Wrap with Padding) est supporté par la plupart des TPM 2.0 modernes via `TPM2_Duplicate` ou `TPM2_Unwrap`
+- RFC 5649 (AES Key Wrap with Padding) n'est défini par aucune commande standard de TPM 2.0 : `TPM2_Unwrap` n'existe pas et `TPM2_Duplicate` n'est pas un AES-KW (voir l'avertissement de [03-tpm.md](03-tpm.md)) ; le support réel du TPM cible reste à établir
 - Un fallback logiciel exposerait la KEK en RAM, ce qui est inacceptable
 - La spécification actuelle exige que la KEK **ne quitte jamais le TPM**
 
@@ -350,7 +352,7 @@ Si le TPM ne supporte ni AES Keywrap ni le mécanisme x3 sécurisé, il est reje
    - ✓ Utiliser NEWUSER si non-root suffisant
    - **RECOMMANDÉ**
 
-**Décision recommandée** : Option 3 avec NEWUSER par défaut, sauf si le manifeste exige explicitement root.
+**Décision recommandée** : Option 3 avec NEWUSER par défaut, sauf si le manifeste exige explicitement root. ⚠️ Contredit [06-jail.md](06-jail.md) (« Choix de design », `CLONE_NEWUSER` non utilisé) : décision à trancher.
 
 ### 2.6 Jail : faut-il utiliser `CLONE_NEWPID` ?
 
@@ -373,7 +375,7 @@ Si le TPM ne supporte ni AES Keywrap ni le mécanisme x3 sécurisé, il est reje
    - ✓ Compatible avec la plupart des payloads
    - **RECOMMANDÉ**
 
-**Décision recommandée** : Option 2 avec NEWPID obligatoire.
+**Décision recommandée** : Option 2 avec NEWPID obligatoire. ⚠️ Contredit [06-jail.md](06-jail.md) (« Choix de design », `CLONE_NEWPID` non utilisé) : décision à trancher.
 
 ### 2.7 Jail : faut-il utiliser `CLONE_NEWNET` ?
 
@@ -450,11 +452,11 @@ Si le TPM ne supporte ni AES Keywrap ni le mécanisme x3 sécurisé, il est reje
 1. **Clés statiques** :
    - ✓ Simple
    - ✗ Si compromise, tous les bundles sont compromis
-   - ✗ Pas de forward secrecy
+   - ✗ Une compromission expose tous les bundles passés et futurs protégés par la même clé
    
 2. **Rotation périodique** :
    - ✓ Limite la fenêtre d'exposition
-   - ✓ Forward secrecy
+   - ✓ Limite le nombre de bundles exposés par une compromission (si les anciennes KEK sont détruites)
    - ✗ Complexité (plusieurs KEK valides simultanément)
    - **RECOMMANDÉ**
 
@@ -471,7 +473,7 @@ Le guide Rust de l'ANSSI (https://anssi-fr.github.io/rust-guide/) contient des r
 | Règle ANSSI | Description | Applicable au projet ? | Action requise |
 |---|---|---|---|
 | **DENV-STABLE** | Utiliser une toolchain stable | ✅ OUI | `rust-toolchain.toml` avec version stable |
-| **DENV-TIERS** | Utiliser des cibles tier 1 pour le safety-critical | ✅ OUI | Cibler `x86_64-unknown-linux-gnu` ou `aarch64-unknown-linux-gnu` |
+| **DENV-TIERS** | Utiliser des cibles tier 1 pour le safety-critical | ⚠️ PARTIEL | La cible principale `armv7-unknown-linux-gnueabihf` est tier 2 : l'écart est à documenter et à compenser par des tests (QEMU, matériel) ; `x86_64-unknown-linux-gnu` (tier 1) reste la cible hôte |
 | **DENV-CARGO-LOCK** | Tracker `Cargo.lock` dans le VCS | ✅ OUI | Commiter `Cargo.lock` |
 | **DENV-CARGO-OPTS** | Ne pas override les variables critiques | ✅ OUI | Ne pas override `debug-assertions` et `overflow-checks` |
 | **DENV-CARGO-ENVVARS** | Ne pas override `RUSTC`, `RUSTC_WRAPPER`, `RUSTFLAGS` | ✅ OUI | Utiliser `Cargo.toml` pour les options |
@@ -480,7 +482,7 @@ Le guide Rust de l'ANSSI (https://anssi-fr.github.io/rust-guide/) contient des r
 | **DENV-AUTOFIX** | Vérifier les fixes automatiques | ✅ OUI | Review manuelle des `cargo fix` |
 
 **Actions concrètes** :
-- Créer `rust-toolchain.toml` avec version stable (ex: 1.75)
+- `rust-toolchain.toml` est créé (canal `stable`, edition 2024 donc Rust ≥ 1.85) ; envisager d'épingler une version exacte pour la reproductibilité
 - Créer `rustfmt.toml` avec configuration standard
 - Ajouter `cargo clippy -- -D warnings` dans la CI
 - Commiter `Cargo.lock`
@@ -510,7 +512,7 @@ Le guide Rust de l'ANSSI (https://anssi-fr.github.io/rust-guide/) contient des r
 | **LANG-UNSAFE-ENCP** | Encapsuler l'unsafe dans des APIs safe | ✅ OUI | Wrapper safe pour toutes les FFI |
 
 **Actions concrètes** :
-- Structure du workspace :
+- Structure du workspace (proposition ; le workspace actuel, décrit dans le README, ne contient que `update-bundle`, `update-tpm`, `update-slot`, `updated`, `updatectl` et `bundle-tool`, avec `unsafe_code = "forbid"` au niveau workspace : toute exception requiert un ADR) :
   ```
   crates/
     update-daemon/       # #![forbid(unsafe_code)]
@@ -644,7 +646,7 @@ Le guide Rust de l'ANSSI (https://anssi-fr.github.io/rust-guide/) contient des r
 
 ### 4.1 Actions critiques (à faire avant implémentation)
 
-1. **Créer `rust-toolchain.toml`** avec version stable
+1. ~~Créer `rust-toolchain.toml`~~ (fait) ; reste à créer `rustfmt.toml`
 2. **Structurer le workspace** avec des crates séparés (safe/unsafe)
 3. **Créer `SecureBuffer<T>`** pour la gestion sécurisée de la mémoire
 4. **Décider de l'architecture daemon** (option 2 : père root + fils user)
@@ -679,7 +681,7 @@ Le guide Rust de l'ANSSI (https://anssi-fr.github.io/rust-guide/) contient des r
 3. **Compatibilité** : Quels TPM 2.0 supportent réellement AES Keywrap (RFC 5649) ?
 4. **Testing** : Comment tester les scénarios d'attaque sans TPM physique ? (simulateur TPM ?)
 5. **Certification** : Faut-il viser une certification Common Criteria ou ANSSI CSPN ?
-6. **Post-quantique** : Faut-il prévoir une migration vers des algorithmes post-quantiques (CRYSTALS-Kyber, CRYSTALS-Dilithium) ?
+6. **Post-quantique** : Faut-il prévoir une migration vers des algorithmes post-quantiques (ML-KEM, ML-DSA) ?
 
 ---
 

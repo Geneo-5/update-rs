@@ -51,13 +51,13 @@ Statut : Brouillon (première itération)
 | **ER8** | Déni de service sur le mécanisme de mise à jour (exhaustion TPM, boucle infinie) | VM3 | **G2 SIGNIFICATIVE** | Device ne peut plus recevoir de mises à jour, doit être redémarré physiquement |
 | **ER9** | Divulgation de la configuration hôte (fichiers /etc, credentials, secrets locaux) | VM6 | **G3 GRAVE** | Exposition de mots de passe, clés SSH, certificats, configuration réseau, avantage pour attaques ultérieures |
 
-### 1.5 Socle de sécurité (mesures existantes)
+### 1.5 Socle de sécurité (mesures spécifiées)
 
-Le projet implémente déjà les mesures suivantes :
+Le projet spécifie les mesures suivantes (aucune n'est encore implémentée : les crates sont des squelettes) :
 
 | Mesure | Description | Couverture |
 |---|---|---|
-| **Signature Ed25519 + ML-DSA** | Authentification hybride (classique + post-quantique) du header | VM1 |
+| **Signature ECDSA P-256 (header)** | Signature du header vérifiée par le TPM (`TPM2_VerifySignature`) ; signatures Ed25519 + ML-DSA (hybride post-quantique) prévues pour les artefacts internes, voir `05-crypto.md` | VM1 |
 | **AES-256-GCM-SIV** | Chiffrement authentifié des chunks (AEAD) | VM2 |
 | **KEK dans TPM** | Clé de chiffrement non exportable, déchiffrement effectué par le TPM | VM1, VM2 |
 | **Sessions chiffrées TPM** | Protection des commandes sensibles sur le bus SPI/I2C | VM1, VM2 |
@@ -92,10 +92,10 @@ Le système repose sur les hypothèses de sécurité matérielle suivantes :
 | Écart | Description | Risque |
 |---|---|---|
 | **Chaîne de boot incomplète** | Pas encore d'ancrage depuis ROM/SoC secure boot → bootloader → kernel | Un attaquant A3 peut modifier le bootloader et contourner toute la chaîne de confiance |
-| **Mécanisme x3 non spécifié** | Les 3 policies TPM ne sont pas encore documentées précisément | Complexité, risque de mauvaise configuration |
+| **Mécanisme x3 partiellement spécifié** | Principe et exigences REQ-TPM-X1 à X7 dans `03-tpm.md` ; les 3 branches de policy TPM ne sont pas encore décrites | Complexité, risque de mauvaise configuration |
 | **Pas d'attestation distante** | Pas de `TPM2_Quote` pour prouver l'identité du TPM à un serveur distant | Impossible de détecter un TPM remplacé ou compromis |
 | **Pas de rotation des clés** | KEK et clé de signature statiques | Si compromise, tous les bundles passés et futurs sont compromis |
-| **Pas de système A/B** | Pas de slot inactif pour rollback atomique | Corruption possible si interruption pendant écriture MTD |
+| **Système A/B non intégré** | Spécifié (REQ-FLW-1 à 3) mais absent de la machine à états de `04-update-flow.md` et du code | Corruption possible si interruption pendant écriture MTD |
 
 ---
 
@@ -201,7 +201,7 @@ SR1 (MITM réseau)
   │
   ├─▶ Intercepte le bundle pendant le téléchargement
   │
-  ├─▶ Tente de modifier le header (signature) → rejeté par vérification Ed25519+ML-DSA
+  ├─▶ Tente de modifier le header (signature) → rejeté par vérification ECDSA P-256 (TPM)
   │
   ├─▶ Tente de modifier le manifeste (chiffré) → rejeté par AES-GCM-SIV (intégrité)
   │
@@ -574,7 +574,7 @@ SR4 (accès physique bus TPM SPI/I2C)
 
 **Stratégie** : **Réduction** (mitigations techniques)
 
-**Mesures déjà implémentées** :
+**Mesures déjà spécifiées** :
 1. ✅ **Namespaces** (mount, ipc, uts, cgroup, net)
 2. ✅ **Seccomp** (strict, default, custom)
 3. ✅ **Capabilities réduites** (drop de toutes les caps non nécessaires)
@@ -618,7 +618,7 @@ SR4 (accès physique bus TPM SPI/I2C)
 | Choisir le bootloader (U-Boot) et le mécanisme de secure boot | Architecte | T+2 semaines | 🔲 À faire |
 | Spécifier les mesures PCR (bootloader, kernel, rootfs) | Architecte | T+2 semaines | 🔲 À faire |
 | Décider de CLONE_NEWUSER et CLONE_NEWPID | Architecte | T+1 semaine | 🔲 À faire |
-| Créer `rust-toolchain.toml` avec version stable | Dev lead | T+1 semaine | 🔲 À faire |
+| Créer `rust-toolchain.toml` avec version stable | Dev lead | T+1 semaine | ✅ Fait (canal `stable`) |
 
 #### Priorité 2 : Haute (pendant implémentation)
 
@@ -701,7 +701,7 @@ SR4 (accès physique bus TPM SPI/I2C)
 
 [[3]] ANSSI, "Guide de développement sécurisé en Rust", 2024. Disponible sur : https://anssi-fr.github.io/rust-guide/
 
-[[4]] Trusted Computing Group, "TPM 2.0 Library Specification", version 1.59, 2019.
+[[4]] Trusted Computing Group, "TPM 2.0 Library Specification", version 1.59, 2019 (la plateforme cible implémente la révision 1.38).
 
 [[5]] MITRE, "ATT&CK Framework", 2024. Disponible sur : https://attack.mitre.org/
 

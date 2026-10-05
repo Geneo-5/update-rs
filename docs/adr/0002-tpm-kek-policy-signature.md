@@ -20,7 +20,7 @@ Les options A (clé scellée en RAM) et B (ECDH via TPM) discutées précédemme
 
 1. **Profil A** (clé privée scellée déballée en RAM) : primitives libres mais exposition RAM.
 2. **Profil B** (ECDH résident via `TPM2_ECDH_ZGen`) : pas d'exposition, mais glue, pas PQ, pas de KEM standard.
-3. **Profil C (retenu)** : KEK AES-256 scellée + policy `PolicyAuthorize` conditionnée à la vérification ECC du header par le TPM. **Pas de fallback logiciel** : le TPM DOIT supporter AES Keywrap nativement. Sessions chiffrées via EK/AK ECC pour protéger le bus.
+3. **Profil C (retenu)** : KEK AES-256 scellée + policy `PolicyAuthorize` conditionnée à la vérification ECC du header par le TPM. **Pas de fallback logiciel** : le TPM DOIT supporter AES Keywrap nativement (ou, à défaut, le mécanisme x3 décrit plus bas). Sessions chiffrées via EK/SRK ECC pour protéger le bus.
 
 ## Décision
 
@@ -29,14 +29,14 @@ Les options A (clé scellée en RAM) et B (ECDH via TPM) discutées précédemme
 - **KEK AES-256 non exportable** dans le TPM, avec `sign=0, decrypt=1, restricted=0`.
 - **Policy `PolicyAuthorize`** : la KEK ne peut être utilisée pour déchiffrer la clé de session (AES Keywrap) que si le TPM a préalablement validé la signature ECDSA P-256 du header (via `TPM2_VerifySignature` + `TPM2_PolicyAuthorize`).
 - **Clé de vérification ECC P-256** stockée dans le TPM (publique uniquement, privée côté éditeur).
-- **Pas de fallback logiciel** : le TPM cible DOIT supporter le déchiffrement AES Keywrap (RFC 5649) en interne. Si le TPM ne le supporte pas, il est rejeté lors du provisioning. La KEK **ne quitte jamais le TPM**.
-- **Sessions chiffrées** : toutes les commandes TPM sensibles sont exécutées sous session chiffrée/authentifiée dérivée de l'EK/AK ECC (protège contre A4).
+- **Pas de fallback logiciel** : le TPM cible DOIT supporter le déchiffrement AES Keywrap (RFC 5649) en interne, ou à défaut le mécanisme alternatif x3 (voir plus bas). S'il ne supporte ni l'un ni l'autre, il est rejeté lors du provisioning. La KEK **ne quitte jamais le TPM**.
+- **Sessions chiffrées** : toutes les commandes TPM sensibles sont exécutées sous session chiffrée/authentifiée dérivée de l'EK/SRK ECC (protège contre A4).
 
 ### Justification
 
 - La KEK **ne quitte jamais le TPM**, ce qui élimine la surface d'attaque d'exposition en RAM.
 - L'utilisation d'ECDSA P-256 (courbe NIST) est acceptable car exécutée **via TPM** (pas de code sensible en clair côté logiciel), et la clé privée n'est jamais exposée (côté éditeur uniquement).
-- Les sessions chiffrées via EK/AK ECC protègent le bus contre A4 (écoute SPI/I2C).
+- Les sessions chiffrées via EK/SRK ECC protègent le bus contre A4 (écoute SPI/I2C).
 
 ## Conséquences
 
@@ -51,15 +51,16 @@ Les options A (clé scellée en RAM) et B (ECDH via TPM) discutées précédemme
 
 ### Négatives / risques
 
-- **Dépendance au support AES Keywrap du TPM** : certains TPM bon marché ne supportent pas `TPM2_Duplicate` AES ou `TPM2_Unwrap`. Ces TPM sont rejetés lors du provisioning.
+- **Dépendance au support AES Keywrap du TPM** : aucune commande TPM 2.0 standard ne réalise AES Key Wrap (RFC 5649) ; `TPM2_Unwrap` n'existe pas et `TPM2_Duplicate` n'est pas un AES-KW (voir l'avertissement de [03-tpm.md](../spec/03-tpm.md)). Les TPM qui ne permettent ni cette capacité ni le mécanisme x3 sont rejetés lors du provisioning.
 - **ECDSA P-256** : courbe NIST, hors liste ANSSI préférée, mais acceptable car exécutée via TPM.
-- **TOCTOU** : entre `TPM2_VerifySignature` et le déchiffrement AES Keywrap, un attaquant A6 pourrait tenter de modifier le header. Atténuation : la policy `PolicyAuthorize` lie la signature à l'usage de la KEK, donc toute modification du header invaliderait la policy.
+- **TOCTOU** : entre `TPM2_VerifySignature` et le déchiffrement AES Keywrap, un attaquant A6 pourrait tenter de modifier le header. Atténuation : la policy `PolicyAuthorize` lie la signature à l'usage de la KEK, donc toute modification du header invaliderait la policy (⚠️ à démontrer : `PolicyAuthorize` autorise un digest de policy et non un header ; voir question 13 de [03-tpm.md](../spec/03-tpm.md)).
 
 ### À revoir
 
 - Décider si la KEK doit être renouvelable en field (pour compromis) ou fixe à vie.
 - Choisir la bibliothèque Rust pour AES Keywrap (`aes-kw` ou implémentation sur `aes`).
 - Valider que `swtpm` supporte les sessions chiffrées ECDH pour les tests.
+- Confirmer sur le TPM cible (révision 1.38) quelle commande réalise le déballage de la clé de session (AES Keywrap natif ou mécanisme x3).
 - Spécifier précisément la chaîne de boot pour ancrer le TPM dans une chaîne de confiance vérifiée (secure boot → bootloader → kernel → rootfs → `updated`).
 
 ### Alternative : mécanisme x3

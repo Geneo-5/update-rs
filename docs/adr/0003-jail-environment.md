@@ -1,6 +1,6 @@
 # ADR-0003 — Payload exécuté dans un environnement jail (tmpfs + bind mounts + seccomp)
 
-**Statut** : Accepté (brouillon)
+**Statut** : Accepté (brouillon, mis à jour le 2026-10-06)
 
 ## Contexte
 
@@ -28,7 +28,7 @@ lecteur de bundle (`updated`), en suivant le modèle suivant :
 
 ### Architecture en 5 phases
 
-1. **Préparation** : `unshare(CLONE_NEWNS | CLONE_NEWPID | CLONE_NEWIPC | CLONE_NEWUTS |
+1. **Préparation** : `unshare(CLONE_NEWNS | CLONE_NEWIPC | CLONE_NEWUTS | CLONE_NEWNET |
    CLONE_NEWCGROUP)` + montage d'un `tmpfs` comme racine du jail.
 2. **Assemblage** : application ordonnée d'un `JailManifest` (contenu dans le manifeste
    du bundle, authentifié par AEAD) : création de répertoires, bind mounts depuis l'hôte,
@@ -55,7 +55,7 @@ de `fsset` : `dir`, `file`, `host_bind`, `chrdev`, `blkdev`, `slink`, `fifo`, `p
 
 On y ajoute :
 - `payload_file` / `payload_dir` : fichiers extraits depuis le payload chiffré,
-- `host_bind_back` : bind mount inversé (jail → hôte) pour les zones de logs.
+- une API de sortie contrôlée (descripteur fourni par le superviseur), qui remplace le `host_bind_back` initialement prévu (voir [spec/06-jail.md](../spec/06-jail.md)).
 
 ### Posture de sécurité
 
@@ -63,14 +63,14 @@ On y ajoute :
 - **Seccomp** : trois profils (`strict`, `default`, `custom`) installés avant `execve`.
 - **Capabilities** : `caps_keep` liste blanche, toutes les autres sont drop.
 - **RO final** : tous les points de montage internes sont remontés `ro,nosuid,nodev,noexec`.
-- **PID namespace** : tue les orphelins à la sortie.
+- **Pas de PID namespace** : le monteur détruit les processus du jail via le cgroup (`cgroup.kill`) à la sortie (voir [spec/06-jail.md](../spec/06-jail.md), « Choix de design »).
 
 ## Conséquences
 
 ### Positives
 
-- Le payload ne laisse **aucune trace** sur le système hôte (hors bind mounts inversés
-  explicitement autorisés).
+- Le payload ne laisse **aucune trace** sur le système hôte (hors sorties autorisées via l'API de sortie contrôlée,
+  explicitement validées).
 - Le lecteur de bundle reste **maître** des opérations : il n'exécute que le script
   d'entrée déclaré, pas des binaires arbitraires du payload.
 - Le `JailManifest` étant dans le manifeste signé/chiffré, il bénéficie des mêmes
@@ -93,9 +93,19 @@ On y ajoute :
 ### Neutres
 
 - La décision n'exclut **pas** le modèle A/B classique : le jail peut contenir un script
-  qui écrit dans un slot inactif (via bind mount explicite de `/dev/mmcblk0pN`).
+  qui écrit dans un slot inactif (via un nœud de périphérique `/dev/mmcblk0pN` explicitement autorisé par la policy machine).
 - La compatibilité avec la configuration d'enbox (syntaxe libconfig) n'est **pas**
   recherchée ; on préfère CBOR pour homogénéité avec le reste du format de bundle.
+
+## Mise à jour (revue de sécurité du 2026-10-06)
+
+Les points suivants complètent ou remplacent la décision initiale (détail dans [CHANGES-security-review.md](../CHANGES-security-review.md) et [spec/06-jail.md](../spec/06-jail.md)) :
+
+- le `JailManifest` est une **demande de capacités** validée contre une policy machine indépendante du bundle : une signature valide ne suffit pas à obtenir une capacité ;
+- le jail est monté par le **supervisor** (privilégié), le parsing du bundle est confié à un **worker** sandboxé ;
+- la résolution de chemins utilise `openat2()` avec `RESOLVE_*` ;
+- `host_bind_back` est remplacé par une API de sortie contrôlée ;
+- ni `CLONE_NEWPID` ni `CLONE_NEWUSER` ne sont utilisés pour l'instant ; décision en cours de revue (voir [spec/07-security-analysis.md](../spec/07-security-analysis.md) § 2.5 et 2.6).
 
 ## Alternatives considérées
 
@@ -110,10 +120,10 @@ On y ajoute :
 
 1. **Validation formelle du profil seccomp** : s'assurer que les profils `strict` et
    `default` couvrent les cas d'usage réels sans bloquer légitimement le payload.
-2. **Gestion du timeout** : politique de kill récursif (PID namespace + `SIGKILL` + wait).
+2. **Gestion du timeout** : politique de kill récursif (`cgroup.kill` + wait).
 3. **Observation** : format de sortie structuré (JSON lines) à définir.
 4. **Persistance post-jail** : politique des artefacts (fichiers, clés) écrits via
-   `host_bind_back`.
+   l'API de sortie contrôlée.
 5. **Tests** : émuler les namespaces sous QEMU/swtpm ; définir des tests d'intégration
    pour chaque type de `fsset`.
 
@@ -121,5 +131,5 @@ On y ajoute :
 
 - [spec/06-jail.md](../spec/06-jail.md) — spécification détaillée
 - [spec/02-bundle-format.md](../spec/02-bundle-format.md) — le `JailManifest` fait partie du manifeste
-- [spec/01-threat-model.md](../spec/01-threat-model.md) — menaces J1-J8
+- [spec/01-threat-model.md](../spec/01-threat-model.md) — menaces J1 à J4 (la surface d'attaque détaillée JS1 à JS11 est dans [spec/06-jail.md](../spec/06-jail.md))
 - [enbox (GitHub)](https://github.com/grgbr/enbox) — référence externe

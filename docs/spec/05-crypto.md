@@ -16,7 +16,7 @@ n'est pas retenu, ses dépendances cryptographiques servent de liste de référe
 |---|---|---|
 | AEAD | **AES-256-GCM-SIV** (RFC 8452, nonce-misuse resistant) | `aes-gcm-siv` (RustCrypto) |
 | AEAD (fallback) | AES-256-GCM (si GCM-SIV non disponible) | `aes-gcm` (RustCrypto) |
-| KDF | HKDF-SHA512 | `hkdf`, `sha2` |
+| KDF | HKDF-SHA256 (dérivation des nonces, voir [02-bundle-format.md](02-bundle-format.md)) | `hkdf`, `sha2` |
 | KEM classique | X25519 (DHKEM, HPKE RFC 9180) | `x25519-dalek`, `hpke` |
 | KEM post-quantique | ML-KEM-1024 (hybride avec X25519) | `ml-kem` |
 | Signature (éditeur) | Ed25519 + ML-DSA (hybride) | `ed25519-dalek`, `ml-dsa` |
@@ -32,7 +32,7 @@ n'est pas retenu, ses dépendances cryptographiques servent de liste de référe
 **AES-GCM-SIV (RFC 8452)** est préféré à AES-GCM classique car il est **nonce-misuse resistant** :
 - Si un nonce/IV est accidentellement réutilisé avec la même clé, la sécurité ne s'effondre pas (contrairement à GCM classique où une réutilisation de nonce permet de forger des ciphertexts).
 - Pour notre cas d'usage, la clé de session est unique par bundle, donc le risque de réutilisation est faible. Cependant, GCM-SIV apporte une robustesse supplémentaire en cas d'erreur d'implémentation ou de bug dans la génération de nonce côté éditeur.
-- **Statut ANSSI** : AES-GCM-SIV est référencé dans les guides BSI (Allemagne) et SOG-IS. L'ANSSI ne l'a pas explicitement listé dans ses guides publics récents, mais elle suit généralement les recommandations SOG-IS. Si GCM-SIV n'est pas disponible dans les crates Rust auditées, AES-256-GCM classique reste acceptable avec génération de nonce déterministe.
+- **Statut ANSSI** : AES-GCM-SIV serait référencé dans les guides BSI (Allemagne) et SOG-IS (à vérifier). L'ANSSI ne l'a pas explicitement listé dans ses guides publics récents, mais elle suit généralement les recommandations SOG-IS. Si GCM-SIV n'est pas disponible dans les crates Rust auditées, AES-256-GCM classique reste acceptable avec génération de nonce déterministe.
 
 #### AES Key Wrap with Padding (RFC 5649) vs AES Key Wrap (RFC 3394)
 
@@ -57,7 +57,7 @@ n'est pas retenu, ses dépendances cryptographiques servent de liste de référe
 - **REQ-CRY-5** — AES Key Wrap DOIT être implémenté selon **RFC 5649** (avec padding automatique). La taille du plaintext DOIT être 44 octets (Key 32 + IV 12), et le ciphertext résultant DOIT être 56 octets.
 - **REQ-CRY-6** — ECDSA P-256 utilisé pour la signature du header DOIT être généré avec un nonce déterministe (RFC 6979) côté éditeur pour éviter les fuites par biais de nonce.
 - **REQ-CRY-7** — L'implémentation d'AES Key Wrap DOIT être résistante aux fautes (vérification d'intégrité avant retour du plaintext).
-- **REQ-CRY-8** — AES-GCM-SIV (RFC 8452) DOIT être utilisé pour le chiffrement des chunks si disponible. Sinon, AES-256-GCM classique avec génération de nonce déterministe (ex: HKDF-SHA512 sur le chunk index + clé de session).
+- **REQ-CRY-8** — AES-GCM-SIV (RFC 8452) DOIT être utilisé pour le chiffrement des chunks si disponible. Sinon, AES-256-GCM classique avec génération de nonce déterministe (ex: HKDF-SHA256 sur le chunk index + clé de session, comme dans [02-bundle-format.md](02-bundle-format.md)).
 
 ## Conformité au guide ANSSI 3.00 (2026)
 
@@ -83,11 +83,11 @@ n'est pas retenu, ses dépendances cryptographiques servent de liste de référe
 **Conformité** : ✅ **CONFORME**
 
 - **Règle `RègleModeChiff`** : pas d'attaque exploitant < 2^(n/2) blocs sous une même clé → AES-GCM-SIV conforme (borne birthday-bound respectée) ✅
-- **Recommandation `RecoModeChiff.1`** : mode non déterministe → AES-GCM-SIV utilise un nonce unique par message ✅
+- **Recommandation `RecoModeChiff.1`** : mode non déterministe → ⚠️ AES-GCM-SIV résiste à la réutilisation de nonce, mais avec le nonce dérivé de manière déterministe (HKDF) retenu dans le format de bundle, le chiffrement d'un chunk donné est déterministe ; acceptable car la clé de session est unique par bundle (voir question ouverte 6)
 - **Recommandation `RecoModeChiff.2`** : preuve de sécurité dans un modèle pertinent → AES-GCM-SIV a une preuve de sécurité dans le modèle standard ✅
 - **Recommandation `RecoModeChiff.3`** : ne pas employer isolément un mode sans intégrité → AES-GCM-SIV est un mode AEAD (chiffrement authentifié) ✅
 
-**Note** : AES-GCM-SIV n'est pas explicitement mentionné dans le guide ANSSI 3.00, mais il est conforme aux règles génériques sur les modes opératoires. Il est également référencé dans les guides BSI (Allemagne) et SOG-IS, que l'ANSSI suit généralement.
+**Note** : AES-GCM-SIV n'est pas explicitement mentionné dans le guide ANSSI 3.00, mais il est conforme aux règles génériques sur les modes opératoires. Il est également référencé dans les guides BSI (Allemagne) et SOG-IS (à vérifier), que l'ANSSI suit généralement.
 
 #### AES Key Wrap with Padding (RFC 5649)
 
@@ -175,8 +175,8 @@ Le guide ANSSI 3.00 recommande de viser une sécurité post-quantique pour les m
 3. Cas d'usage de la libecc (C, ANSSI) : nécessaire ou exclue (FFI) ?
 4. ECDSA P-256 est une courbe NIST, pas dans les listes ANSSI préférées (qui préfère Ed25519). Acceptable car utilisée uniquement **via TPM** (pas de code sensible en clair) ?
 5. Crate `aes-kw` : existe-t-il une implémentation auditable, ou faut-il implémenter sur `aes` ?
-6. Gestion des nonces ECDSA côté éditeur : RFC 6979 obligatoire ou optionnel ?
+6. Le chiffrement déterministe des chunks (nonce dérivé par HKDF, voir [02-bundle-format.md](02-bundle-format.md)) est-il acceptable au regard de `RecoModeChiff.1` du guide ANSSI 3.00 ?
 7. Interaction avec le profil TPM retenu ([03-tpm.md](03-tpm.md)) : ECDH P-256 via TPM pour sessions chiffrées — quelles bibliothèques Rust fiables ?
-8. AES-GCM-SIV : nonce dérivé de manière déterministe (HKDF) ou aléatoire (CSPRNG) ?
+8. Rôle de l'IV de 12 octets embarqué dans la clé de session, inutilisé par la dérivation de nonce (voir question 9 de [02-bundle-format.md](02-bundle-format.md)) ?
 9. **Transition post-quantique pour ECDSA P-256** : quel calendrier pour adopter ML-DSA dans les TPM ?
 10. **Migration de clé** : comment gérer la rotation de la KEK si une vulnérabilité est découverte dans AES-256 (improbable mais à prévoir) ?

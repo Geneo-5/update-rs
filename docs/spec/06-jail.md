@@ -27,7 +27,7 @@ l'intégrité et la confidentialité sont garanties par le bundle lui-même.
 ## Exigences globales
 
 - **REQ-JAIL-1** — Le jail NE DOIT pas écrire sur le système hôte hors zones explicitement
-  autorisées par bind mount inversé (log, cache).
+  autorisées et contrôlées par le superviseur (API de sortie, voir « API de sortie contrôlée »).
 - **REQ-JAIL-2** — Le jail DOIT pouvoir être construit en flux tendu, au fur et à mesure
   du déchiffrement des chunks, sans avoir à les stocker intégralement.
 - **REQ-JAIL-3** — L'environnement DOIT être démonté et libéré (tmpfs, namespaces) dès la
@@ -60,8 +60,8 @@ au début de la séquence, puis se déprivilégie avant d'exécuter le script d'
 6. **Verrouillage final** : tous les points de montage internes sont remontés `ro,
    nodev, nosuid, noexec` ; les namespaces sont figés ; l'entrypoint est lancé avec un
    profil de sécurité minimal (capabilities + securebits + seccomp).
-7. **Pas d'écriture sur l'hôte** : le jail NE PEUT PAS écrire sur l'hôte, sauf via des
-   bind mounts inversés (`host_bind_back`) explicitement autorisés pour les logs uniquement.
+7. **Pas d'écriture sur l'hôte** : le jail NE PEUT PAS écrire sur l'hôte, sauf via
+   l'API de sortie contrôlée fournie par le superviseur (descripteur de fichier, zone de logs uniquement ; voir « API de sortie contrôlée »).
 
 ## Phases d'exécution
 
@@ -86,7 +86,7 @@ au début de la séquence, puis se déprivilégie avant d'exécuter le script d'
 ┌────────────────────────────────────────────────────────────────┐
 │ Phase 2 : Assemblage (bind mounts + payload + dev nodes)       │
 │  - création de l'arborescence (dirs, symlinks)                 │
-│  - montage proc, sysfs, devtmpfs avec flags restrictifs        │
+│  - montage proc, sysfs avec flags restrictifs (pas de devtmpfs)│
 │  - bind mounts host→jail (selon JailManifest.fsset)            │
 │  - streaming des chunks → fichiers dans le jail                │
 │  - création de device nodes (mknod chrdev/blkdev)              │
@@ -155,7 +155,9 @@ au début de la séquence, puis se déprivilégie avant d'exécuter le script d'
 - Enbox n'utilise pas `CLONE_NEWPID` car il nécessite de gérer la logique `init` (processus PID 1 dans le namespace).
 - Pour notre cas d'usage (payload éphémère exécutant un script), un simple `waitpid` suffit pour attendre la fin du jail.
 - Le timeout est géré par un `timer_create` + `SIGALRM` qui envoie `SIGKILL` au processus jail.
-- Si le processus jail fork des enfants, ils sont tués automatiquement quand le père (monteur) termine (process group leader).
+- Si le processus jail fork des enfants, ils ne sont **pas** tués automatiquement à la fin du père : le monteur DOIT détruire tous les processus du jail via le cgroup v2 du jail (`cgroup.kill`, Linux ≥ 5.14, ou `SIGKILL` sur chaque PID de `cgroup.procs`). Un `kill(-pgid)` seul est insuffisant (un processus peut quitter son groupe via `setsid`).
+
+> **Point en révision** : [07-security-analysis.md](07-security-analysis.md) § 2.5 et 2.6 recommandent `CLONE_NEWUSER` conditionnel et `CLONE_NEWPID` obligatoire, ce qui contredit les choix de cette section. La décision est suivie dans [EBIOS-RM-analysis.md](../EBIOS-RM-analysis.md) (plan d'amélioration, priorité 1) ; tant qu'elle n'est pas prise, cette section fait foi.
 
 ### Pourquoi `CLONE_NEWNET` (réseau isolé) ?
 
@@ -192,7 +194,7 @@ objet `jail` qui décrit l'environnement à construire.
 ```toml
 [jail]
 # Namespace policy
-namespaces = ["mount", "pid", "ipc", "uts", "cgroup"]  # "net" optionnel
+namespaces = ["mount", "ipc", "uts", "cgroup", "net"]  # net toujours isolé ; ni pid ni user (voir « Choix de design »)
 root_tmpfs_size = "64M"        # limite tmpfs (0 = pas de limite)
 hostname = "update-payload"
 
@@ -211,7 +213,7 @@ env_pass = ["PATH", "HOME", "LANG"]
 env_set = { "BUNDLE_VERSION" = "${bundle_version}" }
 
 # Capabilities accordées (tout le reste est drop)
-caps_keep = ["net_bind_service", "dac_override"]
+caps_keep = []                 # exemple minimal ; toute capability doit figurer dans caps_whitelist (policy machine)
 
 # Seccomp : profil BPF ou liste blanche de syscalls
 seccomp_profile = "strict"     # "strict" | "default" | "custom"
@@ -233,7 +235,7 @@ path = "/sys"
 flags = ["ro", "nosuid", "nodev", "noexec", "noatime"]
 
 [[jail.fsset]]
-type = "devtmpfs"
+type = "tmpfs"   # /dev est peuplé par les chrdev ci-dessous (pas de devtmpfs)
 path = "/dev"
 flags = ["nosuid", "noexec", "mode=0755"]
 
@@ -280,7 +282,7 @@ minor = 3
 mode = 0o666
 
 [[jail.fsset]]
-type = "blkdev"
+type = "blkdev"             # exemple : refusé par défaut par la policy machine (devices_whitelist)
 path = "/dev/mmcblk0"
 major = 179
 minor = 0
@@ -302,15 +304,15 @@ mode = 0o600
 type = "dir"
 path = "/var/log/payload"
 mode = 0o755
-# bind mount inversé : le jail écrit ici, visible sur l'hôte
-host_bind_back = "/var/log/update-payload"
+# la sortie vers l'hôte passe par l'API de sortie contrôlée (descripteur fourni par le superviseur)
+# ; le bundle ne désigne aucun chemin hôte
 ```
 
 ### Types de `fsset` supportés
 
 | Type | Description |
 |---|---|
-| `dir` | Crée un répertoire dans le jail (mode/uid/gid optionnels). Peut être bindé vers l'hôte via `host_bind_back`. |
+| `dir` | Crée un répertoire dans le jail (mode/uid/gid optionnels). |
 | `file` | Crée un fichier vide (mode/uid/gid). |
 | `host_bind` | Bind mount d'un chemin hôte vers le jail (lecture seule par défaut). |
 | `payload_file` | Fichier extrait depuis le payload chiffré. Référence par `source_ref` (chemin relatif dans le payload). |
@@ -321,7 +323,7 @@ host_bind_back = "/var/log/update-payload"
 | `fifo` | FIFO nommée (`mkfifo`). |
 | `proc` | Montage du pseudo-système `procfs` avec options restrictives. |
 | `sysfs` | Montage de `sysfs` avec options restrictives. |
-| `devtmpfs` | Montage d'un `devtmpfs` peuplé automatiquement par le noyau. |
+| `devtmpfs` | Montage d'un `devtmpfs` peuplé automatiquement par le noyau. **Déconseillé** : expose tous les devices de l'hôte ; refusé par défaut par la policy machine (voir principe 5). |
 | `tmpfs` | Montage tmpfs supplémentaire à l'intérieur du jail (quota, flags). |
 
 ### Règles d'application
@@ -383,19 +385,21 @@ Le daemon `updated` est structuré en deux composants :
 
 ### Surface d'attaque spécifique
 
+Identifiants `JS*` (jail, surface d'attaque), distincts des menaces J1 à J4 de [01-threat-model.md](01-threat-model.md).
+
 | Id | Menace | Atténuation |
 |---|---|---|
-| J1 | Payload échappant le jail via un bind mount mal configuré | Liste blanche `fsset` stricte, validation par la policy machine, aucun `orig` en écriture sans API de sortie contrôlée |
-| J2 | Device node malicieux donnant accès à un device sensible | Nœuds créés uniquement via `fsset` validé par policy machine ; `major`/`minor` validés contre liste blanche machine |
-| J3 | `proc`/`sys` en écriture permettant escalade | Options `ro,nosuid,nodev,noexec` obligatoires ; `hidepid=invisible` pour `proc` ; masquage des sous-répertoires dangereux |
-| J4 | Seccomp contourné par un binaire du payload | Filtre installé **après** pivot_root, `no_new_privs=1` empêchant tout `setuid` ou `execve` vers des binaires privilégiés |
-| J5 | Capabilities conservées après execve | `SECBIT_KEEP_CAPS=0`, `keep_caps=0` sur execve, `PR_CAP_AMBIENT_CLEAR_ALL` |
-| J6 | Fuite de données du payload via API de sortie | API de sortie restrictive (descripteur contrôlé par supervisor), pas de chemin hôte arbitraire |
-| J7 | Processus orphelin gardant des ressources | Pas de PID namespace ; le supervisor attend le jail via `waitpid` et envoie `SIGKILL` sur timeout |
-| J8 | Race condition entre démontage et sortie | `MNT_DETACH` suivi de la sortie du supervisor ; le tmpfs disparaît au dernier close |
-| J9 | Attaque par symlink sur bind mount | Flag `MS_NOSYMFOLLOW` obligatoire sur tous les bind mounts host→jail |
-| J10 | TOCTOU sur résolution de chemins | Utilisation de `openat2()` avec `RESOLVE_*` au lieu de `realpath()` + `open()` |
-| J11 | Attaque par parser du manifeste | Worker sandboxé, manifeste traité comme hostile, validation stricte avant transmission au supervisor |
+| JS1 | Payload échappant le jail via un bind mount mal configuré | Liste blanche `fsset` stricte, validation par la policy machine, aucun `orig` en écriture sans API de sortie contrôlée |
+| JS2 | Device node malicieux donnant accès à un device sensible | Nœuds créés uniquement via `fsset` validé par policy machine ; `major`/`minor` validés contre liste blanche machine |
+| JS3 | `proc`/`sys` en écriture permettant escalade | Options `ro,nosuid,nodev,noexec` obligatoires ; `hidepid=invisible` pour `proc` ; masquage des sous-répertoires dangereux |
+| JS4 | Seccomp contourné par un binaire du payload | Filtre installé **après** pivot_root, `no_new_privs=1` empêchant tout `setuid` ou `execve` vers des binaires privilégiés |
+| JS5 | Capabilities conservées après execve | `SECBIT_KEEP_CAPS=0`, `keep_caps=0` sur execve, `PR_CAP_AMBIENT_CLEAR_ALL` |
+| JS6 | Fuite de données du payload via API de sortie | API de sortie restrictive (descripteur contrôlé par supervisor), pas de chemin hôte arbitraire |
+| JS7 | Processus orphelin gardant des ressources | Pas de PID namespace ; le supervisor attend le jail via `waitpid` et, à la fin ou sur timeout, détruit tous les processus du cgroup du jail (`cgroup.kill`) |
+| JS8 | Race condition entre démontage et sortie | `MNT_DETACH` suivi de la sortie du supervisor ; le tmpfs disparaît au dernier close |
+| JS9 | Attaque par symlink sur bind mount | Flag `MS_NOSYMFOLLOW` obligatoire sur tous les bind mounts host→jail |
+| JS10 | TOCTOU sur résolution de chemins | Utilisation de `openat2()` avec `RESOLVE_*` au lieu de `realpath()` + `open()` |
+| JS11 | Attaque par parser du manifeste | Worker sandboxé, manifeste traité comme hostile, validation stricte avant transmission au supervisor |
 
 ### Posture par défaut
 
@@ -414,15 +418,16 @@ La posture par défaut est **deny-all, allow-list** :
 **Solution** : utiliser `openat2()` avec les flags `RESOLVE_*` (Linux 5.6+) pour résoudre et ouvrir atomiquement :
 
 ```rust
-use libc::{openat2, RESOLVE_NO_SYMLINKS, RESOLVE_BENEATH, RESOLVE_NO_MAGICLINKS};
-
-let how = OpenHow {
-    flags: O_RDONLY | O_NOFOLLOW,
-    mode: 0,
-    resolve: RESOLVE_NO_SYMLINKS | RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS,
-};
-
-let fd = openat2(dirfd, path, &how, size_of::<OpenHow>());
+// Pseudo-code. Ni glibc ni musl n'exposent de wrapper `openat2` : passer par une crate
+// offrant une API safe (ex. `rustix::fs::openat2`, à confirmer) afin de respecter
+// `unsafe_code = "forbid"` (voir README).
+let fd = openat2(
+    dirfd,
+    path,
+    OFlags::RDONLY | OFlags::NOFOLLOW,
+    Mode::empty(),
+    ResolveFlags::NO_SYMLINKS | ResolveFlags::BENEATH | ResolveFlags::NO_MAGICLINKS,
+)?;
 ```
 
 **Propriétés garanties** :
@@ -504,9 +509,9 @@ std::fs::write(format!("{}/cgroup.procs", cgroup_path), jail_pid.to_string())?;
    }
    ```
 
-2. **Cleanup périodique** : un timer systemd (`update-rs-cleanup.timer`) lance `updated --cleanup` toutes les heures pour nettoyer les artefacts résiduels.
+2. **Cleanup périodique** : un timer systemd (`update-rs-cleanup.timer`, ou une tâche cron/init équivalente sans systemd) lance `updated --cleanup` toutes les heures pour nettoyer les artefacts résiduels.
 
-3. **Cleanup au prochain boot** : un service systemd (`update-rs-cleanup.service`) avec `ConditionPathExists=/var/run/update-rs-crashed` nettoie les mounts orphelins au boot si le daemon a crashé.
+3. **Cleanup au prochain boot** : un service systemd (`update-rs-cleanup.service`, ou un script d'init équivalent) avec `ConditionPathExists=/var/run/update-rs-crashed` nettoie les mounts orphelins au boot si le daemon a crashé.
 
 **Propriété de sécurité** : les mounts orphelins ne doivent pas persister au-delà du prochain boot. Le cleanup au démarrage est une **garantie de sécurité**, pas une simple optimisation.
 
@@ -531,9 +536,9 @@ et avant `execve` du script d'entrée.
 - **REQ-JAIL-8** — Toutes les opérations de montage DOIVENT être journalisées avec un
   niveau de sévérité adapté (info, warn, error).
 - **REQ-JAIL-9** — Le script d'entrée DOIT disposer d'un timeout configurable ; son
-  expiration entraîne un `SIGKILL` récursif via le PID namespace.
+  expiration entraîne la destruction de tous les processus du jail (`SIGKILL` via `cgroup.kill` ou, à défaut, sur chaque PID de `cgroup.procs`).
 - **REQ-JAIL-10** — Les sorties stdout/stderr du script d'entrée DOIVENT être capturées
-  et journalisées dans la zone `host_bind_back` de logs si configurée.
+  et journalisées dans la zone de logs hôte gérée par le superviseur (API de sortie contrôlée).
 - **REQ-JAIL-11** — En cas d'échec de n'importe quelle phase, le lecteur DOIT démonter
   intégralement (y compris en cas de panic — via guard Rust ou `Drop` dédié).
 - **REQ-JAIL-12** — Le lecteur NE DOIT PAS exécuter directement de binaire issu du
