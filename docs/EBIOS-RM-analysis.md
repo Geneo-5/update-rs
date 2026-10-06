@@ -117,6 +117,7 @@ Le système repose sur les hypothèses de sécurité matérielle suivantes :
 | **SR2** | Détenteur d'un bundle légitime | Comprendre le contenu, créer un bundle modifié | Faibles (accès au fichier) | Élevées (cryptanalyse, reverse engineering) |
 | **SR3** | Attaquant physique (accès flash hors tension) | Extraire ou modifier le firmware installé | Moyennes (équipement de lecture flash, JTAG) | Élevées (hardware hacking) |
 | **SR4** | Attaquant physique (bus TPM) | Écouter/rejouer les commandes SPI/I2C | Élevées (sonde logique, analyseur de protocole) | Très élevées (cryptographie TPM) |
+| **SR4b** | Attaquant physique (TPM oracle) | Faire déchiffrer la clé de session via le TPM (TPM comme oracle, pas extraction KEK) | Moyennes (accès physique au device, root) | Élevées (cryptographie TPM, mais commande valide) |
 | **SR5** | Attaquant local (compromission root post-boot) | Installer un bundle malveillant, corrompre l'anti-rollback | Élevées (accès root) | Élevées (exploitation kernel, manipulation TPM) |
 | **SR6** | Éditeur malveillant ou compromis | Signer un bundle contenant une backdoor | Très élevées (accès à la clé de signature) | Faibles (pas besoin de compétence technique) |
 | **SR7** | Payload malveillant (jail) | Échapper au sandbox, escalader les privilèges | Faibles (code dans le jail) | Élevées (exploitation de vulnérabilités jail, kernel) |
@@ -149,6 +150,7 @@ Le système repose sur les hypothèses de sécurité matérielle suivantes :
 | **SR7/OV5** | Payload échappe au jail | 🔴 Haute |
 | **SR5/OV4** | Root abaisse l'anti-rollback | 🟠 Moyenne |
 | **SR4/OV6** | Bus TPM extrait la KEK | 🟠 Moyenne |
+| **SR4b/OV6** | TPM utilisé comme oracle de déchiffrement (SO16a V3, SO16b V2) | 🟠 Moyenne (arbitrage) |
 | **SR2/OV2** | Détenteur bundle divulgue le contenu | 🟠 Moyenne |
 | **SR5/OV8** | Root divulgue configuration hôte | 🟠 Moyenne |
 | **SR7/OV8** | Payload divulgue configuration hôte | 🟠 Moyenne |
@@ -380,7 +382,7 @@ SR6/SR8 (accès à la clé privée de signature ECDSA P-256)
   │   ├─▶ Soit en le produisant avec la KEK (symétrique, détenue côté éditeur) : stockée à part de la
   │   │   clé de signature, la compromission de la seule clé de signature ne suffit pas
   │   └─▶ Soit en réutilisant le wrapped_session_key d'un bundle existant dont il connaît la clé de
-  │       session, obtenue en utilisant un device comme oracle (SS13, SO16)
+  │       session, obtenue en utilisant un device comme oracle (SS13, SO16a/SO16b)
   │
   ├─▶ Incrémente bundle_version pour passer l'anti-rollback
   │
@@ -630,7 +632,7 @@ SR10 (fabricant ou intégrateur)
 ```
 SR8 ou SR9 (compromission d'un device ou du poste de build)
   │
-  ├─▶ Extrait la KEK d'un device (SO16, SO18, ou reverse-engineering)
+  ├─▶ Extrait la KEK d'un device (SO16a/SO16b, SO18, ou reverse-engineering)
   │
   └─▶ Si la flotte utilise une KEK unique ou par famille :
       │
@@ -655,7 +657,7 @@ Limite du modèle : la confidentialité n'est opposable qu'aux attaquants sans d
 ```
 SR9 (capture d'un device physique)
   │
-  ├─▶ Extrait la KEK du device capturé (SO16 ou SO18)
+  ├─▶ Extrait la KEK du device capturé (SO16a/SO16b ou SO18)
   │
   ├─▶ Le device est re-provisionné (changement de politique, migration de flotte, remplacement hardware)
   │   │
@@ -854,7 +856,7 @@ SR9 (capture d'un device physique)
 **Mitigations manquantes** :
 - `PolicyPCR` obligatoire (optionnelle dans `03-tpm.md`)
 - Ligne de reset du TPM reliée au reset du SoC (matériel)
-- Lier la policy au header (question 13 de `03`), sinon le TPM sert d'oracle (SO16)
+- Lier la policy au header (question 13 de `03`), sinon le TPM sert d'oracle (SO16a/SO16b)
 
 **Vraisemblance** : **V2 Vraisemblable**
 
@@ -1020,7 +1022,7 @@ SR9 (capture d'un device physique)
 **Enchaînement d'actions** :
 1. **SR8** compromet le poste ou la CI qui exécute `bundle-tool`
 2. **SR8** exfiltre la clé privée de signature (et la KEK si elle est stockée au même endroit)
-3. **SR8** produit hors ligne des bundles malveillants valides pour les devices dont il détient la KEK, ou, sans la KEK, en réutilisant un `wrapped_session_key` dont il connaît la clé de session (obtenue par SO16)
+3. **SR8** produit hors ligne des bundles malveillants valides pour les devices dont il détient la KEK, ou, sans la KEK, en réutilisant un `wrapped_session_key` dont il connaît la clé de session (obtenue par SO16a/SO16b)
 4. Sans révocation, aucune mise à jour légitime ne peut « reprendre la main » sans intervention sur chaque device
 
 **Mitigations existantes** :
@@ -1060,12 +1062,12 @@ SR9 (capture d'un device physique)
 
 ---
 
-#### SO16 : TPM utilisé comme oracle de déchiffrement (SR9 → BS3, BS4) — SS13
+#### SO16a : TPM utilisé comme oracle — une tentative par reboot (SR4b → BS3, BS4) — SS13
 
 **Enchaînement d'actions** :
 1. **SR9** (root sur un device légitime) récupère un bundle chiffré pour la même KEK, par exemple depuis le serveur de distribution
 2. **SR9** envoie directement au TPM (`/dev/tpmrm0`, sans `updated`) la signature de policy déjà fournie avec le dispositif, puis `wrapped_session_key` (la commande de déballage reste à confirmer, voir l'avertissement de `03`)
-3. **BS3** (TPM) satisfait la policy, car `PolicyAuthorize` n'est pas liée au header
+3. **BS3** (TPM) satisfait la policy, car `PolicyAuthorize` n'est pas liée au header (mais à la signature de policy, pas au header)
 4. **SR9** récupère la clé de session, en dérive les clés de chunk (HKDF, entrées publiques) et déchiffre le bundle hors ligne
 
 **Mitigations existantes** :
@@ -1077,7 +1079,33 @@ SR9 (capture d'un device physique)
 - KEK par device ou par famille (question 6 de `00`)
 - Restriction d'accès à `/dev/tpmrm0` (LSM, droits), à envisager en défense en profondeur seulement (root la contourne)
 
-**Vraisemblance** : **V4 Quasi certain** (pour qui contrôle un device)
+**Vraisemblance** : **V3 Très vraisemblable** (root sur un device peut effectuer une tentative de déchiffrement par reboot)
+
+**Note** : les limites d'utilisation du TPM (rate-limites, compteur de tentatives) obligent un reboot du device ou un reset du TPM après un certain nombre de tentatives. Cela borne le nombre de déchiffrements possibles **sans accès physique au reboot**.
+
+**Gravité** : **G3 GRAVE** (ER2)
+
+---
+
+#### SO16b : TPM utilisé comme oracle — boucle de déchiffrement (SR4b → BS3, BS4) — SS13
+
+**Enchaînement d'actions** :
+1. **SR9** (root sur un device légitime) récupère N bundles chiffrés pour la même KEK
+2. **SR9** effectue une première tentative de déchiffrement via le TPM (SO16a)
+3. **SR9** force un reboot physique du device (débrancher/rebrancher, ou reset button)
+4. **SR9** répète les étapes 2-3 autant de fois que nécessaire pour déchiffrer tous les bundles
+
+**Mitigations existantes** :
+- Limites d'utilisation du TPM : forcent un reboot physique du device entre chaque tentative de déchiffrement
+- Clé de session unique par bundle : une extraction n'expose qu'un bundle
+
+**Mitigations manquantes** :
+- **KEK par device** (question 6 de `00`) : compromettre un device ne permet de déchiffrer que les bundles de ce device
+- **Protection physique du device** : anti-tamper, potting — dissuade l'accès physique répété
+
+**Vraisemblance** : **V2 Vraisemblable** (chaque tentative supplémentaire nécessite un accès physique au reboot du device, ce qui constitue une barrière significative à échelle de flotte)
+
+**Note** : les limites d'utilisation du TPM créent une barrière physique naturelle : chaque déchiffrement additionnel nécessite un accès physique au device pour le rebooter. À échelle de flotte, cela rend l'attaque SO16b peu réaliste — un attaquant doit physiquement accéder à N devices pour N bundles, ce qui est souvent plus coûteux que l'attaque elle-même ne le justifie.
 
 **Gravité** : **G3 GRAVE** (ER2)
 
@@ -1139,7 +1167,7 @@ SR9 (capture d'un device physique)
 #### SO19 : Compromission flotte-wide par KEK unique (SR9, SR8 → BS3, BS4, BS9) — SS6
 
 **Enchaînement d'actions** :
-1. **SR8** (ou **SR9**) compromet l'extraction d'une KEK d'un device (via SO16 ou SO18, ou par reverse-engineering du firmware)
+1. **SR8** (ou **SR9**) compromet l'extraction d'une KEK d'un device (via SO16a/SO16b ou SO18, ou par reverse-engineering du firmware)
 2. La flotte utilise une **KEK unique** (ou une poignée de KEK par famille) — question 6 de `00`, question 6 de `03`
 3. **SR8/SR9** récupère N bundles de la flotte (stockés sur le serveur de distribution, ou capturés par SR1)
 4. **SR8/SR9** déchiffre **l'intégralité des bundles de la flotte** qui partagent cette KEK
@@ -1163,7 +1191,7 @@ SR9 (capture d'un device physique)
 #### SO20 : Re-provisionnement d'un device capturé (SR9 → BS3, BS4, BS1) — SS13
 
 **Enchaînement d'actions** :
-1. **SR9** capture un device physique (ou en obtient un identique) et en extrait la KEK (SO16 ou SO18)
+1. **SR9** capture un device physique (ou en obtient un identique) et en extrait la KEK (SO16a/SO16b ou SO18)
 2. **SR9** fait re-provisionner le device (ou un device identique) avec une **nouvelle KEK** (changement de politique, migration de flotte, ou remplacement hardware)
 3. **SR9** utilise la **ancienne KEK** extraite pour déchiffrer des bundles signés avec l'ancien `kek_id`
 4. **SR9** parvient à installer des bundles « rétroactifs » sur le device re-provisionné : le nouveau `kek_id` est dans le bundle, mais **l'ancien bundle** (capturé avant re-provisionnement) utilise l'ancien `kek_id`
@@ -1207,7 +1235,8 @@ SR9 (capture d'un device physique)
 | SO13 (dépendance malveillante) | BS9 | V2 | G4 | ÉLEVÉ | 🔴 Haute |
 | SO14 (vol de la clé de signature) | BS9 | V2 | G4 | ÉLEVÉ | 🔴 Haute |
 | SO15 (chunks réordonnés ou mélangés) | BS1, BS2 | V1 | G4 | FAIBLE | 🟢 Basse |
-| SO16 (TPM comme oracle) | BS3, BS4 | V4 | G3 | ÉLEVÉ | 🟠 Moyenne (arbitrage) |
+| SO16a (oracle TPM — une tentative par reboot) | BS3, BS4 | V3 | G3 | ÉLEVÉ | 🔴 Haute |
+| SO16b (oracle TPM — boucle, reboot physique) | BS3, BS4 | V2 | G3 | MOYEN | 🟠 Moyenne (arbitrage) |
 | SO17 (malfaision de provisionnement) | BS3, BS1 | V4 | G4 | ÉLEVÉ | 🔴 Haute |
 | SO18 (forensique mémoire post-crash) | BS4 | V3 | G3 | ÉLEVÉ | 🔴 Haute |
 | SO19 (compromission flotte-wide) | BS3, BS4, BS9 | V3 | G4 | ÉLEVÉ | 🔴 Haute |
@@ -1228,7 +1257,8 @@ SR9 (capture d'un device physique)
 | R5 : Réinitialisation TPM | G3 | V2 | **MOYEN** | ⚠️ Tolérable (sous conditions) |
 | R6 : Attaque réseau | G4 | V1 | **FAIBLE** | ✅ Acceptable |
 | R7 : Abaissement anti-rollback (fichier) | G3 | V1 | **FAIBLE** | ✅ Acceptable |
-| R8 : Extraction KEK via bus TPM | G4 | V1 | **FAIBLE** | ✅ Acceptable |
+| R8a : Oracle TPM par root (une tentative par reboot) | G3 | V3 | **ÉLEVÉ** | ❌ Inacceptable |
+| R8b : Oracle TPM répété (boucle, reboot physique) | G3 | V2 | **MOYEN** | ⚠️ Tolérable (sous conditions) |
 | R9 : Compromission de la clé de signature éditeur (SS6, SO14) | G4 | V2 | **ÉLEVÉ** | ❌ Inacceptable |
 | R10 : Compromission de la chaîne d'approvisionnement logicielle (SS7, SO13) | G4 | V2 | **ÉLEVÉ** | ❌ Inacceptable |
 | R11 : Freeze et maintien sur version vulnérable (SS8, SO7) | G3 | V3 | **ÉLEVÉ** | ❌ Inacceptable |
@@ -1236,7 +1266,7 @@ SR9 (capture d'un device physique)
 | R13 : Exfiltration ou falsification via le payload (SS10, SO12) | G3 | V2 | **MOYEN** | ⚠️ Tolérable (sous conditions) |
 | R14 : Reset du TPM et rejeu de PCR (SS11, SO6) | G3 | V2 | **MOYEN** | ⚠️ Tolérable (sous conditions) |
 | R15 : Injection de fautes sur le SoC (SS12) | G4 | V1 | **FAIBLE** | ✅ Acceptable (hypothèses matérielles) |
-| R16 : Divulgation par le propriétaire du device, TPM comme oracle (SS13, SO16) | G3 | V4 | **ÉLEVÉ** | ⚠️ À arbitrer (acceptation ou réduction) |
+| R16 : Divulgation par le propriétaire du device, TPM comme oracle (SS13, SO16a/SO16b) | G3 | V4 | **ÉLEVÉ** | ⚠️ À arbitrer (acceptation ou réduction) |
 | R17 : Erreur de provisionnement — KEK incorrecte (SS14, SO17) | G4 | V4 | **CRITIQUE** | ❌ Inacceptable |
 | R18 : Compromission flotte-wide par KEK unique (SS15, SO19) | G4 | V3 | **ÉLEVÉ** | ❌ Inacceptable |
 | R19 : Re-provisionnement d'un device capturé (SS16, SO20) | G3 | V3 | **ÉLEVÉ** | ❌ Inacceptable |
@@ -1325,6 +1355,33 @@ SR9 (capture d'un device physique)
 4. 🔲 **Protection physique** (nice-to-have) : potting, anti-tamper
 
 **Risque résiduel après traitement** : **FAIBLE** (device bloqué, nécessité d'intervention physique)
+
+---
+
+#### R8a : Oracle TPM par root — une tentative par reboot (ÉLEVÉ → FAIBLE)
+
+**Stratégie** : **Réduction** (KEK par device, limitation des politiques TPM)
+
+**Mesures à implémenter** :
+1. 🔲 **KEK par device** (à décider) : chaque device a sa propre KEK (question 6 de `00`) — compromettre un device n'ouvre que ce device
+2. 🔲 **Policy de la KEK liée au bundle** (question 13 de `03`) : lier le `kek_id` et/ou le hash du header à la policy de la KEK via `PolicyNV` ou `PolicySigned`
+3. 🔲 **Restriction d'accès à `/dev/tpmrm0`** (LSM, ACL) — à envisager en défense en profondeur seulement (root peut contourner)
+4. 🔲 **Zéroize de la clé de session après usage** (déjà prévu) : limite la fenêtre d'exposition
+
+**Risque résiduel après traitement** : **FAIBLE** (si KEK par device + policy liée au bundle)
+
+---
+
+#### R8b : Oracle TPM répété — boucle de déchiffrement (MOYEN → FAIBLE)
+
+**Stratégie** : **Réduction** (barrières physiques + techniques)
+
+**Mesures à implémenter** :
+1. ✅ **Limites d'utilisation du TPM** : les limites de déchiffrement du TPM forcent un reboot physique — barrière physique naturelle
+2. 🔲 **KEK par device** (à décider) — un device compromise ne permet de déchiffrer que des bundles de ce device
+3. 🔲 **Protection physique du device** (anti-tamper, potting) — dissuade l'accès physique répété
+
+**Risque résiduel après traitement** : **FAIBLE** (les limites physiques du TPM rendent l'attaque peu réaliste)
 
 ---
 
