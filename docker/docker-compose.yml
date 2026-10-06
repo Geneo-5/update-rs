@@ -1,0 +1,114 @@
+version: '3.8'
+
+services:
+  # Service de développement (shell interactif)
+  dev:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: dev
+    volumes:
+      - ..:/workspace
+      - cargo-cache:/usr/local/cargo/registry
+      - target-cache:/workspace/target
+    working_dir: /workspace
+    command: /bin/bash
+    stdin_open: true
+    tty: true
+    environment:
+      - CARGO_TARGET_DIR=/workspace/target
+      - UPDATE_RS_TARGET=armv7-unknown-linux-gnueabihf
+
+  # Service de build (build complet)
+  build:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: build
+    volumes:
+      - ..:/workspace
+      - cargo-cache:/usr/local/cargo/registry
+      - target-cache:/workspace/target
+    working_dir: /workspace
+    command: cargo build --workspace --release
+
+  # Service de test
+  test:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: build
+    volumes:
+      - ..:/workspace
+      - cargo-cache:/usr/local/cargo/registry
+      - target-cache:/workspace/target
+    working_dir: /workspace
+    command: cargo test --workspace --all-targets
+
+  # Service de lint (clippy + rustfmt)
+  lint:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: build
+    volumes:
+      - ..:/workspace
+      - cargo-cache:/usr/local/cargo/registry
+      - target-cache:/workspace/target
+    working_dir: /workspace
+    command: bash -c "cargo fmt --all --check && cargo clippy --all-targets -- -D warnings"
+
+  # Service de fuzzing
+  fuzz:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: build
+    volumes:
+      - ..:/workspace
+      - cargo-cache:/usr/local/cargo/registry
+      - target-cache:/workspace/target
+    working_dir: /workspace
+    command: cargo +nightly fuzz run bundle_header -- -max_total_time=300
+    environment:
+      - RUST_BACKTRACE=1
+
+  # Service de couverture
+  coverage:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: build
+    volumes:
+      - ..:/workspace
+      - cargo-cache:/usr/local/cargo/registry
+      - target-cache:/workspace/target
+    working_dir: /workspace
+    command: cargo tarpaulin --workspace --fail-under 80 --out Html
+
+  # Service runtime (démon)
+  runtime:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: runtime
+    volumes:
+      - /var/run:/var/run
+      - /var/log/update-rs:/var/log/update-rs
+    devices:
+      - /dev/tpmrm0:/dev/tpmrm0
+    privileged: false
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run
+
+volumes:
+  cargo-cache:
+  target-cache:

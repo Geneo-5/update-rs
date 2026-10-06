@@ -1,0 +1,46 @@
+[package]
+name = "update-rs-fuzz"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1.3", features = ["derive"] }
+
+# Dépendances vers les crates à fuzzer
+update-bundle = { path = "../crates/update-bundle" }
+update-tpm = { path = "../crates/update-tpm" }
+
+[[bin]]
+name = "bundle_header"
+path = "fuzz_targets/bundle_header.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "bundle_chunk"
+path = "fuzz_targets/bundle_chunk.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "jail_manifest"
+path = "fuzz_targets/jail_manifest.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "tpm_command"
+path = "fuzz_targets/tpm_command.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "state_machine"
+path = "fuzz_targets/state_machine.rs"
+test = false
+doc = false
