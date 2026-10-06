@@ -37,9 +37,9 @@ Système de mise à jour d'une plateforme embarquée de type SolidRun Clearfog, 
 | PCR | Platform Configuration Register du TPM |
 | NV index | Emplacement de stockage non volatil du TPM |
 | **KEK** | **Key Encryption Key** : clé symétrique AES-256 résidant dans le TPM, utilisée pour déballer la clé de session du bundle |
-| **Clé de session** | Clé AES-256-GCM-SIV éphémère (Key 32 octets + IV 12 octets) encapsulée dans le header, déchiffrée via la KEK |
+| **Clé de session** | Clé aléatoire de 256 bits (master key), unique par bundle, encapsulée dans le header et déchiffrée via la KEK ; les clés AES-256-GCM-SIV des chunks en sont dérivées par HKDF |
 | **AES Keywrap** | AES Key Wrap with Padding (RFC 5649), mécanisme d'encapsulation symétrique avec intégrité intégrée (RFC 3394 pour la variante sans padding) |
-| **EK / AK** | Endorsement Key / Attestation Key : clés racines ECC du TPM utilisées pour les sessions chiffrées |
+| **EK / SRK / AK** | Endorsement Key et Storage Root Key (clés de chiffrement, utilisables comme clé de salage des sessions chiffrées) ; Attestation Key (clé de signature) |
 | **PolicyAuthorize** | Mécanisme TPM 2.0 liant l'usage d'une clé à la signature d'une autorité (ici, la clé ECC de vérification du header) |
 | **Jail** | Environnement sandboxé d'exécution du payload, construit dynamiquement à partir d'un tmpfs et de bind mounts |
 | **JailManifest** | Description déclarative du jail (namespaces, fsset, entrypoint, capabilities, seccomp), contenue dans le manifeste du bundle |

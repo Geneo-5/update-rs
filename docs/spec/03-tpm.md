@@ -34,11 +34,11 @@ La KEK a une `authPolicy` composée qui **autorise son usage en déchiffrement u
 - `TPM2_PolicyAuthorize` : l'autorité de vérification (clé ECC publique dans le TPM) signe un digest de policy approuvé. Si la signature est valide, la policy de la KEK est satisfaite.
 - Alternative : `TPM2_PolicySecret` ou `TPM2_PolicySigned` avec la clé de vérification.
 
-### Clé de session (AES-256-GCM-SIV)
+### Clé de session (master key)
 
-La clé de session (Key 256-bit + IV 96-bit) est générée côté éditeur pour chaque bundle, puis **encapsulée avec AES Key Wrap with Padding (RFC 5649)** par la KEK. Le résultat (ciphertext 56 octets pour Key+IV) est placé dans le header du bundle.
+La clé de session (master key de 256 bits, dont les clés de chunk sont dérivées par HKDF) est générée côté éditeur pour chaque bundle, puis **encapsulée avec AES Key Wrap with Padding (RFC 5649)** par la KEK. Le résultat (ciphertext de 40 octets pour une clé de 32 octets) est placé dans le header du bundle.
 
-**Note** : RFC 5649 est préféré à RFC 3394 car il supporte des tailles arbitraires (non multiples de 8 octets). Voir [05-crypto.md](05-crypto.md).
+**Note** : RFC 5649 est retenu pour sa généralité (tailles non multiples de 8 octets) ; avec une clé de 32 octets, RFC 3394 donnerait la même taille de ciphertext (question ouverte 9 de [05-crypto.md](05-crypto.md)).
 
 ### Déchiffrement de la clé de session
 
@@ -48,7 +48,7 @@ La clé de session (Key 256-bit + IV 96-bit) est générée côté éditeur pour
 2. Le TPM vérifie la signature ECC du header via `TPM2_VerifySignature` sur le hash qu'il a calculé.
 3. Le TPM satisfait la policy de la KEK via `PolicyAuthorize` (voir détail ci-dessous).
 4. Le TPM déchiffre directement la clé de session encapsulée (AES Keywrap RFC 5649) via `TPM2_Duplicate` ou `TPM2_Unwrap` et la retourne au logiciel (dans une session chiffrée).
-5. La KEK **ne quitte jamais le TPM**. Seule la clé de session (44 octets : Key + IV) est retournée au logiciel.
+5. La KEK **ne quitte jamais le TPM**. Seule la clé de session (32 octets) est retournée au logiciel.
 
 ### Mécanisme `PolicyAuthorize` (détail)
 
@@ -104,6 +104,7 @@ Le mécanisme x3 définit **trois branches d'autorisation** possibles. Chaque br
 - Seul un déchiffrement AES autorisé peut être demandé.
 - Les arguments de la commande doivent être contraints.
 - Le plaintext déchiffré peut être retourné à `updated`.
+- Le plaintext déchiffré est la clé de session (32 octets) ; si le mécanisme x3 est retenu, le découpage en blocs AES doit être revu pour ce nouveau format (40 octets de ciphertext, voir [02-bundle-format.md](02-bundle-format.md)).
 - Si le plaintext est une clé de session, cette clé peut se trouver en RAM dans `updated`.
 - Une compromission d'`updated` peut exposer la session key déchiffrée, mais pas la KEK.
 

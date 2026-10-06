@@ -10,7 +10,7 @@ Statut : Brouillon (proposition à valider)
 - Intégrité et authenticité du logiciel installé sur le device.
 - Confidentialité du contenu des bundles (propriété intellectuelle, secrets embarqués).
 - **KEK (Key Encryption Key)** : clé symétrique AES-256 résidant dans le TPM, utilisée pour déballer les clés de session des bundles.
-- **Clé de session** : clé AES-GCM éphémère (Key + IV) déballée à chaque mise à jour, utilisée pour déchiffrer les chunks.
+- **Clé de session** : master key AES de 256 bits, éphémère, déballée à chaque mise à jour ; les clés de chunk utilisées pour déchiffrer le bundle en sont dérivées.
 - **Clé publique de vérification ECC** : ancre de confiance, utilisée par le TPM pour valider les signatures des headers.
 - **Sessions chiffrées TPM** : canal sécurisé entre le logiciel et le TPM, protégeant les commandes sensibles.
 - **Index NV** : ancre de confiance (hash), compteur anti-rollback, paramètres du dispositif.

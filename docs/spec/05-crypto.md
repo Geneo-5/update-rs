@@ -16,7 +16,7 @@ n'est pas retenu, ses dépendances cryptographiques servent de liste de référe
 |---|---|---|
 | AEAD | **AES-256-GCM-SIV** (RFC 8452, nonce-misuse resistant) | `aes-gcm-siv` (RustCrypto) |
 | AEAD (fallback) | AES-256-GCM (si GCM-SIV non disponible) | `aes-gcm` (RustCrypto) |
-| KDF | HKDF-SHA256 (dérivation des nonces, voir [02-bundle-format.md](02-bundle-format.md)) | `hkdf`, `sha2` |
+| KDF | HKDF-SHA256 (dérivation de la clé et du nonce de chaque chunk depuis la clé de session, voir [02-bundle-format.md](02-bundle-format.md)) | `hkdf`, `sha2` |
 | KEM classique | X25519 (DHKEM, HPKE RFC 9180) | `x25519-dalek`, `hpke` |
 | KEM post-quantique | ML-KEM-1024 (hybride avec X25519) | `ml-kem` |
 | Signature (éditeur) | Ed25519 + ML-DSA (hybride) | `ed25519-dalek`, `ml-dsa` |
@@ -31,21 +31,21 @@ n'est pas retenu, ses dépendances cryptographiques servent de liste de référe
 
 **AES-GCM-SIV (RFC 8452)** est préféré à AES-GCM classique car il est **nonce-misuse resistant** :
 - Si un nonce/IV est accidentellement réutilisé avec la même clé, la sécurité ne s'effondre pas (contrairement à GCM classique où une réutilisation de nonce permet de forger des ciphertexts).
-- Pour notre cas d'usage, la clé de session est unique par bundle, donc le risque de réutilisation est faible. Cependant, GCM-SIV apporte une robustesse supplémentaire en cas d'erreur d'implémentation ou de bug dans la génération de nonce côté éditeur.
-- **Statut ANSSI** : AES-GCM-SIV serait référencé dans les guides BSI (Allemagne) et SOG-IS (à vérifier). L'ANSSI ne l'a pas explicitement listé dans ses guides publics récents, mais elle suit généralement les recommandations SOG-IS. Si GCM-SIV n'est pas disponible dans les crates Rust auditées, AES-256-GCM classique reste acceptable avec génération de nonce déterministe.
+- Chaque chunk est chiffré sous une clé dérivée distincte (voir [02-bundle-format.md](02-bundle-format.md)) : aucun couple (clé, nonce) n'est réutilisé par construction. GCM-SIV reste une défense en profondeur contre une erreur d'implémentation de la dérivation.
+- **Statut ANSSI** : AES-GCM-SIV serait référencé dans les guides BSI (Allemagne) et SOG-IS (à vérifier). L'ANSSI ne l'a pas explicitement listé dans ses guides publics récents, mais elle suit généralement les recommandations SOG-IS. Si GCM-SIV n'est pas disponible dans les crates Rust auditées, AES-256-GCM classique reste acceptable (clé de chunk unique par message, voir [02-bundle-format.md](02-bundle-format.md)).
 
 #### AES Key Wrap with Padding (RFC 5649) vs AES Key Wrap (RFC 3394)
 
-**RFC 5649** est préféré à RFC 3394 car il supporte des **tailles arbitraires** (non multiples de 8 octets) :
-- Notre clé de session = Key (32 octets) + IV (12 octets) = **44 octets**, qui n'est pas un multiple de 8.
+**RFC 5649** est retenu pour supporter des **tailles arbitraires** (non multiples de 8 octets). Avec une clé de session de 32 octets (multiple de 8), RFC 3394 donnerait la même taille de ciphertext (voir question ouverte 9) :
+- Notre clé de session = **32 octets** (master key), multiple de 8 : aucun padding n'est nécessaire.
 - RFC 3394 nécessite que le plaintext soit un multiple de 8 octets (sinon padding manuel requis).
 - RFC 5649 gère automatiquement le padding avec un format spécifique (4 octets de Magic + 4 octets de longueur + données).
 
 **Calcul de la taille ciphertext RFC 5649** :
-- Plaintext : 44 octets (Key 32 + IV 12)
-- Padding : RFC 5649 padde à un multiple de 8 octets → 44 → 48 octets
+- Plaintext : 32 octets (clé de session)
+- Padding : aucun (déjà multiple de 8)
 - Header RFC 5649 : 8 octets (4 octets Magic + 4 octets longueur originale)
-- **Ciphertext final : 8 + 48 = 56 octets**
+- **Ciphertext final : 8 + 32 = 40 octets**
 
 **Statut ANSSI** : RFC 5649 n'est pas explicitement mentionné dans les guides ANSSI, mais RFC 3394 est bien connu et accepté. RFC 5649 est une extension naturelle qui simplifie l'implémentation.
 
@@ -54,10 +54,11 @@ n'est pas retenu, ses dépendances cryptographiques servent de liste de référe
 - **REQ-CRY-2** — Versions épinglées, `Cargo.lock` versionné, audit (`cargo audit`/`cargo vet`/`cargo deny`) en CI.
 - **REQ-CRY-3** — Vecteurs de test officiels (RFC, NIST) exécutés en CI, y compris sur ARMv7 (QEMU).
 - **REQ-CRY-4** — Les clés et secrets intermédiaires DOIVENT être zeroizés.
-- **REQ-CRY-5** — AES Key Wrap DOIT être implémenté selon **RFC 5649** (avec padding automatique). La taille du plaintext DOIT être 44 octets (Key 32 + IV 12), et le ciphertext résultant DOIT être 56 octets.
+- **REQ-CRY-5** — AES Key Wrap DOIT être implémenté selon **RFC 5649**. La taille du plaintext DOIT être 32 octets (clé de session) et le ciphertext résultant DOIT être 40 octets.
 - **REQ-CRY-6** — ECDSA P-256 utilisé pour la signature du header DOIT être généré avec un nonce déterministe (RFC 6979) côté éditeur pour éviter les fuites par biais de nonce.
 - **REQ-CRY-7** — L'implémentation d'AES Key Wrap DOIT être résistante aux fautes (vérification d'intégrité avant retour du plaintext).
-- **REQ-CRY-8** — AES-GCM-SIV (RFC 8452) DOIT être utilisé pour le chiffrement des chunks si disponible. Sinon, AES-256-GCM classique avec génération de nonce déterministe (ex: HKDF-SHA256 sur le chunk index + clé de session, comme dans [02-bundle-format.md](02-bundle-format.md)).
+- **REQ-CRY-8** — AES-GCM-SIV (RFC 8452) DOIT être utilisé pour le chiffrement des chunks si disponible, sous une clé et un nonce dérivés par chunk (REQ-CRY-9). Sinon, AES-256-GCM classique, avec la même dérivation.
+- **REQ-CRY-9** — La clé et le nonce de chaque chunk (et du manifeste) DOIVENT être dérivés de la clé de session par `HKDF-Expand-SHA256` avec les `info` définis dans [02-bundle-format.md](02-bundle-format.md) ; la clé de session NE DOIT jamais chiffrer directement, et les clés dérivées DOIVENT être zeroizées après usage.
 
 ## Conformité au guide ANSSI 3.00 (2026)
 
@@ -83,7 +84,7 @@ n'est pas retenu, ses dépendances cryptographiques servent de liste de référe
 **Conformité** : ✅ **CONFORME**
 
 - **Règle `RègleModeChiff`** : pas d'attaque exploitant < 2^(n/2) blocs sous une même clé → AES-GCM-SIV conforme (borne birthday-bound respectée) ✅
-- **Recommandation `RecoModeChiff.1`** : mode non déterministe → ⚠️ AES-GCM-SIV résiste à la réutilisation de nonce, mais avec le nonce dérivé de manière déterministe (HKDF) retenu dans le format de bundle, le chiffrement d'un chunk donné est déterministe ; acceptable car la clé de session est unique par bundle (voir question ouverte 6)
+- **Recommandation `RecoModeChiff.1`** : mode non déterministe → ✅ chaque message est chiffré sous une clé dérivée unique ; le caractère déterministe pour une clé de session donnée est sans effet puisque celle-ci est unique par bundle
 - **Recommandation `RecoModeChiff.2`** : preuve de sécurité dans un modèle pertinent → AES-GCM-SIV a une preuve de sécurité dans le modèle standard ✅
 - **Recommandation `RecoModeChiff.3`** : ne pas employer isolément un mode sans intégrité → AES-GCM-SIV est un mode AEAD (chiffrement authentifié) ✅
 
@@ -148,7 +149,7 @@ n'est pas retenu, ses dépendances cryptographiques servent de liste de référe
 Le guide ANSSI 3.00 (section A.4.1) mentionne la notion de **crypto-période** (durée de vie maximale des clés) pour réduire l'effet d'une éventuelle compromission.
 
 **Notre architecture** :
-- **Clé de session** : éphémère, unique par bundle (une nouvelle clé est générée pour chaque mise à jour)
+- **Clé de session** : éphémère, unique par bundle (une nouvelle clé est générée pour chaque mise à jour) ; les clés de chunk en sont dérivées, une par chunk
 - **KEK** : fixe à vie du dispositif (stockée dans le TPM, non exportable)
 - **Clé de vérification ECC** : fixe à vie du dispositif (stockée dans le TPM, publique uniquement)
 
@@ -175,8 +176,8 @@ Le guide ANSSI 3.00 recommande de viser une sécurité post-quantique pour les m
 3. Cas d'usage de la libecc (C, ANSSI) : nécessaire ou exclue (FFI) ?
 4. ECDSA P-256 est une courbe NIST, pas dans les listes ANSSI préférées (qui préfère Ed25519). Acceptable car utilisée uniquement **via TPM** (pas de code sensible en clair) ?
 5. Crate `aes-kw` : existe-t-il une implémentation auditable, ou faut-il implémenter sur `aes` ?
-6. Le chiffrement déterministe des chunks (nonce dérivé par HKDF, voir [02-bundle-format.md](02-bundle-format.md)) est-il acceptable au regard de `RecoModeChiff.1` du guide ANSSI 3.00 ?
-7. Interaction avec le profil TPM retenu ([03-tpm.md](03-tpm.md)) : ECDH P-256 via TPM pour sessions chiffrées — quelles bibliothèques Rust fiables ?
-8. Rôle de l'IV de 12 octets embarqué dans la clé de session, inutilisé par la dérivation de nonce (voir question 9 de [02-bundle-format.md](02-bundle-format.md)) ?
-9. **Transition post-quantique pour ECDSA P-256** : quel calendrier pour adopter ML-DSA dans les TPM ?
-10. **Migration de clé** : comment gérer la rotation de la KEK si une vulnérabilité est découverte dans AES-256 (improbable mais à prévoir) ?
+6. Interaction avec le profil TPM retenu ([03-tpm.md](03-tpm.md)) : ECDH P-256 via TPM pour sessions chiffrées — quelles bibliothèques Rust fiables ?
+7. **Transition post-quantique pour ECDSA P-256** : quel calendrier pour adopter ML-DSA dans les TPM ?
+8. **Migration de clé** : comment gérer la rotation de la KEK si une vulnérabilité est découverte dans AES-256 (improbable mais à prévoir) ?
+9. Clé de session de 32 octets : conserver RFC 5649 (padding non exercé) ou revenir à RFC 3394 (même taille de ciphertext, plus simple, mieux connu) ? Impact sur `keywrap_alg`, REQ-CRY-5, REQ-TPM-6 et le mécanisme x3.
+10. HKDF-SHA256 : conformité au guide ANSSI 3.00 (fonctions de dérivation de clés) à confirmer, et crate `hkdf` à auditer.

@@ -260,6 +260,17 @@ Bundle demande → POLICY (machine) → allowed? → jail ou reject
    - Justification mise à jour (KEK ne quitte jamais le TPM)
    - Références mises à jour
 
+## Dérivation de clés par chunk (2026-10-06)
+
+La clé de session devient une *master key* de 32 octets, enveloppée par la KEK ; une clé AES-256-GCM-SIV et un nonce sont dérivés par `HKDF-Expand-SHA256` pour chaque chunk et pour le manifeste. Cela remplace la décision 2 ci-dessus (clé unique + nonce dérivé par HKDF) et les tailles associées.
+
+- `wrapped_session_key` : 56 → **40 octets** (plus d'IV de 12 octets dans le plaintext) ;
+- offsets du header : `wrapped_session_key` à 160 (40 octets), `ecc_signature_r` à 200, `ecc_signature_s` à 232, `padding` à 264 (248 octets) ; la signature couvre `header[0..200]` (et non plus `[0..216]`) ;
+- nouvelle exigence REQ-BUN-15 (`02`) et REQ-CRY-9 (`05`) ; `RecoModeChiff.1` passe de ⚠️ à ✅ ;
+- manifeste : chiffré comme un message AEAD unique sous sa propre clé dérivée (label `manifest`), ce qui fixe ses paramètres AEAD ;
+- `00`, `01`, `03` et l'ADR-0002 mis à jour ; le mécanisme x3 (`03`) est à revoir pour le nouveau format (40 octets de ciphertext) ;
+- questions ouvertes ajoutées : RFC 5649 ou RFC 3394 (`05`, question 9), conformité ANSSI de HKDF (`05`, question 10), taille maximale du manifeste (`02`, question 8).
+
 ## Relecture de cohérence (2026-10-06)
 
 Corrections apportées après relecture croisée des spécifications, des ADR et de l'analyse EBIOS :
@@ -279,8 +290,7 @@ Corrections apportées après relecture croisée des spécifications, des ADR et
 1. Quel bootloader (U-Boot) et quel mécanisme de secure boot pour ancrer la chaîne de confiance jusqu'au TPM ?
 2. Comment mesurer et étendre les PCRs pour le bootloader, kernel, et rootfs ?
 3. Politique de rollback du compteur NV : comment empêcher un attaquant de faire revenir le compteur en arrière ?
-4. Rôle de l'IV de 12 octets de la clé de session (inutilisé par la dérivation HKDF des nonces, voir `02-bundle-format.md`) ?
-5. Quelle commande TPM réalise le déballage de la clé de session (voir l'avertissement de `03-tpm.md`) ?
+4. Quelle commande TPM réalise le déballage de la clé de session (voir l'avertissement de `03-tpm.md`) ?
 
 ## Prochaines étapes recommandées
 

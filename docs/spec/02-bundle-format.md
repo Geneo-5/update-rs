@@ -27,7 +27,7 @@ L'en-tête a une **taille fixe** (padding éventuel) pour permettre un traitemen
 
 ### Composition de l'en-tête (Header)
 
-L'en-tête contient toutes les métadonnées nécessaires au traitement en streaming et à la vérification initiale. Tous ses champs, à l'exception de la signature et du padding, sont couverts par une signature ECC (ECDSA P-256 sur `SHA-256(header[0..216])`). Le padding n'est pas signé : le lecteur DOIT vérifier qu'il est entièrement à zéro.
+L'en-tête contient toutes les métadonnées nécessaires au traitement en streaming et à la vérification initiale. Tous ses champs, à l'exception de la signature et du padding, sont couverts par une signature ECC (ECDSA P-256 sur `SHA-256(header[0..200])`). Le padding n'est pas signé : le lecteur DOIT vérifier qu'il est entièrement à zéro.
 
 #### Structure binaire (esquisse, taille fixe 512 octets)
 
@@ -35,7 +35,7 @@ L'en-tête contient toutes les métadonnées nécessaires au traitement en strea
 |---|---|---|---|
 | 0 | 4 | `magic` | `0x55505253` (`"UPRS"`) |
 | 4 | 2 | `header_version` | Version du format de header (ex: `0x0001`). Si une future version nécessite un header plus grand, elle aura un `header_version` différent et une taille différente. |
-| 6 | 2 | `alg_suite` | Suite algorithmique (ex: `0x0001` = AES-256-GCM-SIV + ECDSA P-256 + SHA-256) |
+| 6 | 2 | `alg_suite` | Suite algorithmique (ex: `0x0001` = AES-256-GCM-SIV + HKDF-SHA256 + ECDSA P-256 + SHA-256) |
 | 8 | 4 | `header_size` | Taille totale du header (constante par version, ex: 512 pour v1) |
 | 12 | 4 | `min_firmware_version` | Version firmware minimale requise (anti-rollback, vérifié contre compteur NV TPM) |
 | 16 | 4 | `bundle_version` | Version de ce bundle (monotone, incrémentée par l'éditeur) |
@@ -46,14 +46,14 @@ L'en-tête contient toutes les métadonnées nécessaires au traitement en strea
 | 92 | 4 | `keywrap_alg` | `0x0001` = AES Key Wrap with Padding RFC 5649 |
 | 96 | 32 | `kek_id` | Identifiant (hash) de la KEK cible dans le TPM |
 | 128 | 32 | `bundle_id` | Identifiant unique du bundle (UUID ou hash) |
-| 160 | 56 | `wrapped_session_key` | **AES Key Wrap (RFC 5649)** de la clé de session (Key 256-bit + IV 96-bit = 44 octets plaintext → 56 octets ciphertext) |
-| 216 | 32 | `ecc_signature_r` | Composante r de la signature ECDSA P-256 (32 octets) |
-| 248 | 32 | `ecc_signature_s` | Composante s de la signature ECDSA P-256 (32 octets) |
-| 280 | 232 | `padding` | Réservé, mis à zéro |
+| 160 | 40 | `wrapped_session_key` | **AES Key Wrap (RFC 5649)** de la clé de session (master key de 256 bits = 32 octets plaintext → 40 octets ciphertext) |
+| 200 | 32 | `ecc_signature_r` | Composante r de la signature ECDSA P-256 (32 octets) |
+| 232 | 32 | `ecc_signature_s` | Composante s de la signature ECDSA P-256 (32 octets) |
+| 264 | 248 | `padding` | Réservé, mis à zéro |
 
 **Total : 512 octets** (alignement sur secteur flash)
 
-**Note sur `wrapped_session_key`** : La clé de session = Key (32 octets) + IV (12 octets) = **44 octets**. RFC 5649 encapsule en blocs de 8 octets : 44 octets → 48 octets (padding) + 8 octets (header RFC 5649) = **56 octets** de ciphertext.
+**Note sur `wrapped_session_key`** : la clé de session est une *master key* de 32 octets (multiple de 8 : aucun padding RFC 5649 n'est nécessaire). Le ciphertext fait 8 octets (AIV RFC 5649) + 32 octets = **40 octets**. Les clés et nonces de chunks en sont dérivés (voir « Dérivation des clés »).
 
 **Note sur l'évolution du header** : si une future version nécessite un header plus grand (ex: 1024 octets), elle aura :
 - Un `header_version` différent (ex: `0x0002`)
@@ -62,14 +62,14 @@ L'en-tête contient toutes les métadonnées nécessaires au traitement en strea
 
 #### Détail des champs sensibles
 
-- **Clé de session chiffrée** (`wrapped_session_key`, 56 octets) :
-  - Une clé de session éphémère **AES-256-GCM-SIV** (Key 256-bit + IV 96-bit) est générée côté éditeur pour chaque bundle.
-  - Cette clé (44 octets : Key + IV) est encapsulée avec **AES Key Wrap with Padding (RFC 5649)** par la KEK du dispositif cible.
-  - Le résultat (56 octets de ciphertext) est placé dans le header.
-  - La KEK (Key Encryption Key) réside de manière non exportable dans le TPM du dispositif cible (voir `03-tpm.md`) et **ne quitte jamais le TPM**. Le TPM effectue le déchiffrement AES Keywrap en interne et retourne uniquement la clé de session déballée (44 octets) via une session chiffrée.
+- **Clé de session chiffrée** (`wrapped_session_key`, 40 octets) :
+  - Une clé de session éphémère de 256 bits (*master key*) est générée côté éditeur pour chaque bundle (CSPRNG). Elle ne chiffre jamais directement : les clés et nonces **AES-256-GCM-SIV** sont dérivés par HKDF (voir « Dérivation des clés »).
+  - Cette clé (32 octets) est encapsulée avec **AES Key Wrap with Padding (RFC 5649)** par la KEK du dispositif cible.
+  - Le résultat (40 octets de ciphertext) est placé dans le header.
+  - La KEK (Key Encryption Key) réside de manière non exportable dans le TPM du dispositif cible (voir `03-tpm.md`) et **ne quitte jamais le TPM**. Le TPM effectue le déchiffrement AES Keywrap en interne et retourne uniquement la clé de session déballée (32 octets) via une session chiffrée.
 
 - **Signature ECC** (`ecc_signature_r` + `ecc_signature_s`) :
-  - Signature ECDSA P-256 calculée sur `SHA-256(header[0..216])` (tous les champs sauf signature et padding).
+  - Signature ECDSA P-256 calculée sur `SHA-256(header[0..200])` (tous les champs sauf signature et padding).
   - La clé publique de vérification est stockée dans le TPM (publique uniquement).
 
 ### Flux de validation
@@ -79,10 +79,10 @@ L'en-tête contient toutes les métadonnées nécessaires au traitement en strea
 3. **Vérification de taille** : `header_size` doit correspondre à la taille attendue pour cette version.
 4. **Vérification anti-rollback (version)** : `bundle_version` doit être > dernière version installée (stockée dans un index NV TPM ou fichier persistant).
 5. **Vérification anti-rollback (firmware)** : `min_firmware_version` doit être ≤ version firmware actuelle du device.
-6. **Hash du header (par le TPM)** : Le lecteur transmet le buffer du header au TPM via `TPM2_HashSequenceStart` + `SequenceUpdate` + `SequenceComplete` (mode PCR process). Le TPM calcule lui-même `SHA-256(header[0..216])`.
+6. **Hash du header (par le TPM)** : Le lecteur transmet le buffer du header au TPM via `TPM2_HashSequenceStart` + `SequenceUpdate` + `SequenceComplete` (mode PCR process). Le TPM calcule lui-même `SHA-256(header[0..200])`.
 7. **Vérification de signature ECC** : Le TPM vérifie la signature ECDSA via `TPM2_VerifySignature` sur le hash qu'il a calculé (sous session chiffrée).
 8. **Déchiffrement de la clé de session** : Le TPM satisfait la policy de la KEK et déchiffre `wrapped_session_key` (sous session chiffrée). Voir `03-tpm.md` pour le détail du mécanisme (AES Keywrap natif ou mécanisme alternatif x3 avec policies restreintes).
-9. **Streaming** : Une fois la clé de session obtenue, le lecteur peut déchiffrer et authentifier les chunks en streaming (AEAD).
+9. **Streaming** : Une fois la clé de session obtenue, le lecteur dérive la clé et le nonce de chaque chunk (HKDF) puis les déchiffre et les authentifie en streaming (AEAD).
 
 ### Exigences supplémentaires
 
@@ -96,7 +96,7 @@ L'en-tête contient toutes les métadonnées nécessaires au traitement en strea
 ### Manifeste (contenu après le header)
 
 Le manifeste est un document structuré (CBOR) chiffré et authentifié par la clé de
-session AES-GCM. Il contient :
+session (clé dédiée dérivée avec le label `manifest`, voir « Dérivation des clés »). Il contient :
 
 - **Métadonnées du bundle** : version, éditeur, date, description.
 - **Liste des artefacts** : fichiers/images contenus dans le payload (nom, taille, hash, rôle).
@@ -105,7 +105,7 @@ session AES-GCM. Il contient :
   [06-jail.md](06-jail.md) pour le schéma détaillé.
 - **Signatures internes** (optionnel) : signatures individuelles d'artefacts critiques.
 
-Le `JailManifest` est **authentifié** par l'AEAD des chunks et **confidentiel** grâce au
+Le `JailManifest` est **authentifié** par l'AEAD du manifeste et **confidentiel** grâce au
 chiffrement par clé de session. Il ne peut donc pas être modifié sans invalider le bundle.
 
 ## Authentification des chunks (décision)
@@ -118,21 +118,34 @@ Chaque chunk est chiffré/authentifié individuellement avec **AES-256-GCM-SIV**
 
 ```
 Plaintext:    chunk_data (taille variable, ≤ chunk_size)
-Key:          session_key[0..32] (32 octets)
-Nonce:        dérivé par HKDF-SHA256 de (session_key, bundle_id, chunk_index) — voir ci-dessous
+Key:          chunk_key (32 octets), dérivée de la clé de session — voir « Dérivation des clés »
+Nonce:        chunk_nonce (12 octets), dérivé en même temps que la clé
 AAD:          bundle_id || chunk_index || chunk_count || is_last_chunk || chunk_data_length
 Ciphertext:   encrypted_chunk || auth_tag (16 octets)
 ```
 
-### Dérivation du nonce
+### Dérivation des clés
+
+La clé de session (32 octets, aléatoire, unique par bundle) est une *master key* : elle n'est jamais utilisée directement pour chiffrer, uniquement comme clé pseudo-aléatoire de `HKDF-Expand` (RFC 5869 ; l'étape Extract est inutile car l'entrée est déjà uniforme). Chaque chunk a sa propre clé et son propre nonce :
 
 ```
-nonce = HKDF-SHA256(
-  ikm = session_key[0..32],
-  salt = bundle_id,
-  info = "chunk-nonce" || chunk_index (u32 BE)
-)[0..12]  // 96 bits pour AES-GCM-SIV
+okm = HKDF-Expand-SHA256(
+  prk  = session_key,                                  // 32 octets
+  info = "update-rs/chunk" || bundle_id || chunk_index (u32 BE),
+  L    = 44
+)
+chunk_key   = okm[0..32]    // clé AES-256-GCM-SIV
+chunk_nonce = okm[32..44]   // nonce 96 bits
 ```
+
+Le manifeste est chiffré comme un message AEAD unique, sous une clé et un nonce dérivés de la même façon avec `info = "update-rs/manifest" || bundle_id` ; son AAD est `bundle_id || manifest_length (u32 BE)`. Les labels `chunk` et `manifest` diffèrent dès leur début, ce qui assure la séparation de domaine.
+
+Conséquences :
+
+- chaque couple (clé, nonce) ne sert qu'à un seul message : la question de l'unicité des nonces ne se pose plus, et la résistance de GCM-SIV à la réutilisation de nonce n'est qu'une défense en profondeur ;
+- la fuite d'une clé de chunk n'expose pas les autres chunks ni le manifeste ;
+- `okm`, `chunk_key` et `chunk_nonce` sont zeroizés dès que le chunk est traité ;
+- le chiffrement est déterministe pour une clé de session donnée, sans effet puisque celle-ci est unique par bundle.
 
 ### Construction de l'AAD
 
@@ -151,6 +164,7 @@ AAD = bundle_id (32 octets) ||
 - **Non-troncature** : `is_last_chunk` + `chunk_count` empêche de couper le bundle.
 - **Non-mix-and-match** : `bundle_id` dans l'AAD empêche de combiner des chunks de bundles différents.
 - **Non-rejeu** : `bundle_id` + `chunk_index` empêche de rejouer un chunk d'un ancien bundle.
+- **Cloisonnement** : chaque chunk et le manifeste sont chiffrés sous une clé distincte, dérivée de la clé de session.
 
 ### Validation séquentielle
 
@@ -164,6 +178,7 @@ Le lecteur DOIT valider les chunks dans l'ordre séquentiel :
 - **REQ-BUN-12** — Chaque chunk DOIT être authentifié avec une AAD structurée incluant `bundle_id`, `chunk_index`, `chunk_count`, `is_last_chunk`, et `chunk_data_length`.
 - **REQ-BUN-13** — Le lecteur DOIT rejeter tout chunk dont l'index ne correspond pas à l'index attendu (détection de réordonnancement).
 - **REQ-BUN-14** — Le lecteur DOIT rejeter tout bundle si le flag `is_last_chunk` n'est pas positionné sur le dernier chunk (détection de troncature).
+- **REQ-BUN-15** — La clé de session NE DOIT servir que d'entrée à `HKDF-Expand` ; chaque chunk et le manifeste DOIVENT être chiffrés sous une clé et un nonce dérivés distincts (voir « Dérivation des clés »).
 
 ## Conformité cryptographique
 
@@ -175,6 +190,7 @@ Les algorithmes utilisés dans le format de bundle sont conformes au guide ANSSI
 - **AES Key Wrap (RFC 5649)** : conforme, utilise AES-256 comme primitive sous-jacente
 - **ECDSA P-256** : acceptable (non post-quantique, mais utilisé via TPM uniquement)
 - **SHA-256** : conforme aux règles et recommandations
+- **HKDF-SHA256** : dérivation de clés standardisée (RFC 5869) ; conformité au guide ANSSI à confirmer (voir question 10 de [05-crypto.md](05-crypto.md))
 
 Voir [05-crypto.md](05-crypto.md) pour l'analyse détaillée de conformité.
 
@@ -187,6 +203,5 @@ Voir [05-crypto.md](05-crypto.md) pour l'analyse détaillée de conformité.
 5. Représentation du manifeste (CBOR, TLV, autre) ; alignement avec IETF SUIT (RFC 9124) ?
 6. Taille de chunk, et bornes maximales acceptées par le lecteur.
 7. Champ `tree_root` : l'authentification des chunks reposant sur la chaîne AEAD (voir ci-dessus), le champ est-il conservé (arbre de hachage) ou retiré du header ?
-8. Paramètres AEAD du manifeste (nonce, AAD) : le manifeste est-il le chunk d'indice 0 ou une structure distincte ? Non spécifié à ce stade.
-9. L'IV de 12 octets embarqué dans la clé de session (44 octets) n'est pas utilisé par la dérivation de nonce des chunks : le retirer (clé de 32 octets, `wrapped_session_key` de 40 octets) ou préciser son rôle ?
-10. Emplacement des signatures Ed25519 + ML-DSA évoquées dans [05-crypto.md](05-crypto.md) : le header n'embarque que la signature ECDSA P-256 (vérifiée par le TPM). Ces signatures sont-elles les « signatures internes » du manifeste ?
+8. Taille maximale du manifeste : chiffré comme un message AEAD unique, il est entièrement tamponné avant vérification du tag (REQ-BUN-5, REQ-BUN-6). Quelle borne ?
+9. Emplacement des signatures Ed25519 + ML-DSA évoquées dans [05-crypto.md](05-crypto.md) : le header n'embarque que la signature ECDSA P-256 (vérifiée par le TPM). Ces signatures sont-elles les « signatures internes » du manifeste ?

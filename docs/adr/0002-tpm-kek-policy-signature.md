@@ -42,8 +42,8 @@ Les options A (clé scellée en RAM) et B (ECDH via TPM) discutées précédemme
 
 ### Positives
 
-- La clé de session AES-GCM (Key + IV) peut être générée côté éditeur de manière standard (CSPRNG), puis encapsulée via AES Keywrap (RFC 5649).
-- Le format de bundle est simple : un header de 512 octets avec `wrapped_session_key` (56 octets) et signature ECC (64 octets).
+- La clé de session (master key de 256 bits, dont les clés de chunk sont dérivées par HKDF) peut être générée côté éditeur de manière standard (CSPRNG), puis encapsulée via AES Keywrap (RFC 5649).
+- Le format de bundle est simple : un header de 512 octets avec `wrapped_session_key` (40 octets) et signature ECC (64 octets).
 - Le TPM joue son rôle d'ancre de confiance sans devoir faire de chiffrement de masse.
 - L'alignement avec ANSSI est maintenu pour les primitives côté éditeur (Ed25519 + ML-DSA pour les signatures "long-terme" ; ECDSA P-256 via TPM uniquement pour le header, acceptable).
 - Résistance à l'écoute du bus TPM (sessions chiffrées).
