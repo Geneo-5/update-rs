@@ -1216,6 +1216,173 @@ SR9 (capture d'un device physique)
 
 ---
 
+#### SO21 — Extraction physique de la flash + création de bundle offline (SR3 → BS1) — SS19
+
+**Enchaînement d'actions** :
+
+1. **SR3** dessoude la puce flash d'un device et extrait le firmware installé (firmware dump via programmeur SPI)
+2. **SR3** reverse-engine le format de bundle à partir d'un firmware légitime (header, structure, algorithme de chiffrement)
+3. **SR3** crée des bundles personnalisés *offline* : il peut générer un header valide (en connaissant le format) et chiffrer un payload arbitraire avec un algorithme de chiffrement connu
+4. **SR3** installe les bundles créés sur d'autres devices de la flotte : le format est correct, le header est structuralement valide, mais **la signature ECC est invalide** (SR3 ne possède pas la clé privée de signature)
+5. **Si SR3 parvient à obtenir la clé de signature** (SO14) ou à forger une signature (faille cryptographique), les bundles créés sont **acceptés comme légitimes**
+
+**Variantes** :
+- **Bundle basé sur un bundle capturé** : SR3 capture un bundle légitime, modifie le payload (en gardant le header et le wrapped_session_key), et l'installe sur un autre device. Le header reste valide (signature ECC intacte), mais le **hash du header ne correspond plus** au payload → le bundle est rejeté par la vérification de cohérence (REQ-THR-1).
+- **Bundle entièrement fabriqué** : SR3 ne possède pas la clé de signature, donc un bundle entièrement fabriqué est rejeté. Cependant, si SR3 combine l'extraction de flash (SR3) avec la compromission de la clé de signature (SO14), le bundle est **entièrement valide**.
+
+**Mitigations existantes** :
+- Signature ECC du header : un bundle non signé par l'éditeur légitime est rejeté (REQ-THR-1)
+- `kek_id` + policy PCR : un bundle créé pour un dispositif différent est rejeté (REQ-THR-2)
+- Hash du payload dans le header : la cohérence header/payload est vérifiée → un bundle avec payload modifié mais header original est rejeté
+
+**Mitigations manquantes** :
+- **Verrou de production** : la flash devrait contenir un identifiant de production unique (gravé en usine) lié à la KEK ; un bundle créé sans cet identifiant est rejeté
+- **Bootrom vérifié** : la chaîne de boot doit mesurer le firmware dans le TPM (PCR) pour empêcher l'exécution d'un firmware modifié
+- **Protection physique de la flash** : chiffrer la flash elle-même (hardware encryption) rend l'extraction brute plus difficile
+- **Détection de dessoudage** : des capteurs sur le PCB détectant l'absence de la puce flash (pin détect connecté au supervisor)
+
+**Vraisemblance** : **V3 Très vraisemblable** (si un dispositif est saisi, la flash extraite, et le firmware reverse-engine — nécessite un adversaire avancé mais accessible à des acteurs étatiques ou industriels)
+
+**Gravité** : **G4 CRITIQUE** (installation de firmware malveillant sur la flotte entière si la clé de signature est compromise ; MOYEN sinon — signature non falsifiable)
+
+---
+
+#### SO22 — Compromission du serveur de distribution (SR1 + SR8 → BS1) — SS20
+
+**Enchaînement d'actions** :
+
+1. **SR1/SR8** compromet un serveur de distribution (accès lecture/écriture sur le serveur)
+2. **SR1/SR8** remplace un bundle légitime par un bundle modifié : **le payload est changé, mais le header signé et le `wrapped_session_key` sont conservés**
+3. **SR1/SR8** sert le bundle modifié à un device lors d'une mise à jour
+4. **Le device télécharge le bundle modifié**, vérifie la signature du header (valide, car conservé), débloque la clé de session via le TPM, et installe le payload modifié
+
+**Note critique** : si le header contient un **hash du payload** (intégrité header→payload), le bundle modifié est rejeté à l'étape 4. Si le header **ne contient pas** de hash du payload, ou si le hash est calculé sur les données *non chiffrées* et que le payload modifié est également chiffré de la même manière, le bundle est **accepté**.
+
+**Variantes** :
+- **Serveur proxy compromis** : un proxy intermédiaire entre le serveur de distribution légitime et le device modifie les bundles à la volée (attaque « homme du milieu » sur le serveur, pas sur le transport).
+- **Cache serveur compromis** : un cache CDN sert un bundle corrompu mis en cache depuis un bundle légitique ; le hash du payload en cache est incorrect.
+- **Bundle mixte** : SR1/SR8 combine le header d'un bundle A avec le payload d'un bundle B. Le `kek_id` peut ne pas correspondre → le device rejette si `kek_id` ne correspond pas.
+
+**Mitigations existantes** :
+- Signature ECC du header : le header doit correspondre au payload (si le hash du payload est dans le header)
+- `kek_id` : si le bundle mixte combine des bundles avec des `kek_id` différents, le device rejette le bundle
+
+**Mitigations manquantes** :
+- **Hash du bundle complet dans le header** : le header doit contenir un hash cryptographique du **payload complet** (pas seulement du manifeste) pour détecter la substitution de payload
+- **Signature du bundle complet** (header + payload) : signer le bundle complet (pas seulement le header) élimine la possibilité de substituer le payload
+- **Vérification d'intégrité côté client** : le device doit vérifier l'intégrité du bundle **avant** de le traiter (hash du bundle complet + signature du hash)
+- **Serveurs de distribution redondants** : un mécanisme de vérification multi-sources (le device télécharge le bundle depuis plusieurs serveurs et vérifie la cohérence)
+
+**Vraisemblance** : **V3 Très vraisemblable** (si un serveur de distribution est compromis, tous les bundles peuvent être modifiés — scénario très plausible dans un déploiement industriel avec des infrastructures partagées)
+
+**Gravité** : **G4 CRITIQUE** (installation de firmware malveillant sur la flotte entière via un seul point de compromission du serveur)
+
+---
+
+#### SO23 — Rejeu de bundle offline avec clé de session extraite (SR1 + SR10 → BS1, BS4) — SS21
+
+**Enchaînement d'actions** :
+
+1. **SR1/SR10** capture un bundle lors d'une mise à jour légitime (A1 : observe/rejoue/coupe le transport)
+2. **SR1/SR10** obtient ultérieurement la **clé de session** du bundle capturé par :
+   - **Forensique mémoire** (SO18) : extraction de la RAM d'un device ayant installé le bundle
+   - **Oracle TPM** (SO16a/b) : forcing le TPM à révéler la clé de session par requêtes répétées
+3. **SR1/SR10** dispose de la clé de session et du bundle capturé : il peut **déchiffrer le payload** du bundle capturé
+4. **SR1/SR10** installe le bundle capturé (désormais déchiffré et compris) sur un **appareil identique** (ou reproduit) de la flotte, de manière **entièrement offline**
+
+**Différence avec SO20** : SO20 concerne le re-provisionnement d'un dispositif capturé (la KEK change). SO23 concerne le **rejeu offline** d'un bundle capturé *avec sa clé de session* sur un appareil identique — aucun accès réseau requis au moment de l'installation.
+
+**Variantes** :
+- **Appareil identique reproduit** : SR1/SR10 acquiert un appareil hardware identique au device cible (même modèle, même révision hardware), réutilise l'ancienne clé de session et installe le bundle capturé.
+- **Bundle capturé réutilisable** : le bundle capturé contient un header avec `kek_id` correspondant à la cible ; la clé de session extraite permet de déchiffrer le payload sans interaction réseau.
+
+**Mitigations existantes** :
+- `kek_id` dans le header : le device rejette les bundles dont le `kek_id` ne correspond pas à une KEK provisionnée
+- Contre-mesures anti-forensique (mlock, madvise(DONTDUMP)) : rend l'extraction de clé de session (SO18) plus difficile mais pas impossible (attaquant physique)
+- Contre-mesures anti-oracle TPM (SO16a/b) : limitent le nombre de tentatives de déchiffrement
+
+**Mitigations manquantes** :
+- **Bind hash du bundle à l'appareil** : le header devrait contenir un hash de l'identifiant matériel unique de l'appareil cible ; un bundle déchiffré ne peut être installé que sur l'appareil pour lequel il a été créé
+- **Rotation de clé de session** : les clés de session devraient être renouvelées périodiquement (tous les N bundles) pour limiter la fenêtre d'exposition d'une clé compromise
+- **Période de validité du bundle** : un bundle expire après une durée donnée ; un bundle expiré est rejeté même si sa signature est valide
+- **Rate limiting côté serveur** : limiter le nombre de bundles installables par appareil par période de temps
+
+**Vraisemblance** : **V2 Vraisemblable** (nécessite de combiner capture de bundle + obtention de clé de session + acquisition d'un appareil identique — barrières multiples, mais chacune est elle-même plausible)
+
+**Gravité** : **G3 GRAVE** (déchiffrement de bundles capturés, installation sur appareil identique — impact limité à un appareil, pas flotte-wide)
+
+---
+
+#### SO24 — Manipulation du manifeste jail pour exfiltration de données hôte (SR10 + SR11 → BS5) — SS22
+
+**Enchaînement d'actions** :
+
+1. **SR10/SR11** fournit un bundle dont le **JailManifest** semble structuralement valide mais demande des bind mounts de fichiers sensibles de l'hôte (par exemple `/etc/shadow`, clés SSH privées, certificats TLS, mots de passe dans des fichiers de configuration)
+2. **Le supervisor** traite le JailManifest comme valide et effectue les bind mounts demandés dans le jail (tmpfs)
+3. **Le payload dans le jail** accède aux fichiers sensibles montés via les bind mounts
+4. **Le payload** utilise l'**API de sortie contrôlée** (stdout, fichiers de rapport, ou tout autre mécanisme de sortie du jail) pour exfiltrer le contenu de ces fichiers vers un canal que l'attaquant peut collecter
+
+**Note critique** : un JailManifest valide peut demander légitimement des fichiers de configuration (fichiers de config du service de mise à jour, par exemple). Le risque vient du fait que **sans vérification sémantique** du contenu demandé, des fichiers sensibles peuvent passer pour des fichiers de configuration légitimes.
+
+**Variantes** :
+- **Faux fichiers de configuration** : le JailManifest demande `/etc/ssh/sshd_config` (config légitime) mais en réalité le payload extrait le fichier `/etc/ssh/ssh_host_private_key` (nom similaire, contenu sensible).
+- **Bind mount d'un filesystem sensible** : le JailManifest demande le bind mount d'un filesystem contenant des données sensibles (par exemple `/media/` contenant un disque USB branché).
+- **Exfiltration par stdout** : le payload dans le jail imprime le contenu des fichiers sensibles sur stdout ; le supervisor capture stdout et le transmet à l'attaquant (si le canal de sortie n'est pas correctement isolé).
+
+**Mitigations existantes** :
+- Jail Manifest validé structuralement : le format est vérifié, mais **le contenu sémantique ne l'est pas**
+- Bind mounts limités à des chemins absolus : pas de chemins relatifs, pas de liens symboliques externes au jail
+
+**Mitigations manquantes** :
+- **Liste blanche des chemins de bind mount** : seuls les chemins explicitement autorisés (liste statique ou policy) sont permis ; les chemins non listés sont rejetés
+- **Vérification sémantique** : le contenu demandé par le JailManifest doit être validé sémantiquement (le supervisor vérifie que le contenu demandé correspond bien à un fichier de configuration légitime, pas un fichier sensible)
+- **Isolement strict de la sortie** : l'API de sortie contrôlée ne permet que des données structurées de taille bornée (pas de transfert de fichier arbitraire)
+- **Principe du moindre privilège pour le jail** : le jail ne monte que ce qui est strictement nécessaire au payload (pas de accès en lecture aux fichiers de l'hôte sauf si explicitement justifié)
+
+**Vraisemblance** : **V2 Vraisemblable** (un attaquant disposant d'un bundle et connaissant la structure du JailManifest peut tenter cette manipulation — accessible à un attaquant de niveau moyen)
+
+**Gravité** : **G3 GRAVE** (exfiltration de données sensibles de l'hôte via le mécanisme de mise à jour lui-même)
+
+---
+
+#### SO25 — Contournement des protections physiques du TPM (SR3 + SR4 → BS3) — SS23
+
+**Enchaînement d'actions** :
+
+1. **SR3/SR4** avec accès physique au dispositif **contourne les mécanismes de protection physique** du TPM (mastic anti-tamper, commutateurs anti-ouverture, boîtier scellé)
+2. **SR3/SR4** accède directement aux broches du TPM (SPI, I2C, ou bus dédié) **sans activer** les commutateurs anti-tamper (en les neutralisant avant l'accès)
+3. **SR3/SR4** tente d'**extraire la KEK** par des moyens matériels :
+   - Lecture directe de la mémoire interne du TPM (side-channel sur l'alimentation)
+   - Injection de fautes (glitches voltage/horloge) pour contourner les politiques
+   - Extraction physique de la puce TPM et analyse microscope (FAI — Failure Analysis)
+4. **SR3/SR4** obtient la KEK et peut **déchiffrer des bundles** destinés au dispositif (ou à la famille de dispositifs partageant la même KEK)
+
+**Différence avec SO5 (réinitialisation TPM)** : SO5 considère le TPM comme un composant accessible (réinitialisation = perte de configuration). SO25 considère le contournement **actif** des protections physiques (pas juste l'accès, mais le *bypass* des protections).
+
+**Différence avec SO16a/b (oracle TPM)** : SO16a/b exploite les commandes TPM *autorisées* (via des sessions chiffrées) pour extraire la clé de session. SO25 contourne le TPM lui-même (niveau matériel), en ignorant les protections logicielles.
+
+**Variantes** :
+- **Neutralisation des commutateurs anti-tamper** : SR3/SR4 désactive les commutateurs anti-ouverture *avant* d'accéder aux broches du TPM, empêchant l'activation du mécanisme de zéroisation des clés.
+- **Microscopie électronique (FIBI)** : extraction physique de la puce TPM et analyse couche par couche pour extraire les clés stockées en mémoire non volatile interne.
+- **Injection de fautes matérielles** : injection de glitches voltage/horloge pendant une opération de déchiffrement TPM pour forcer le retour d'un secret.
+
+**Mitigations existantes** :
+- Sessions chiffrées via EK/SRK ECC : protège contre l'écoute du bus TPM (A4)
+- `PolicyAuthorize` : la KEK ne peut être utilisée que si le header est validé → même si la KEK est extraite, elle ne peut être utilisée que dans le contexte de politique
+- **Zéroisation des clés en cas de tampering** : si les commutateurs anti-tamper sont activés, les clés sont zérisées
+
+**Mitigations manquantes** :
+- **Détection physique du TPM** : le dispositif doit détecter la présence/absence du TPM (pin de présence connectée au supervisor) ; un TPM absent ou remplacé empêche toute mise à jour
+- **Stockage sécurisé des clés dans le TPM** : les clés doivent être stockées dans une zone protégée du TPM (non accessible même par accès physique direct aux broches)
+- **Zéroisation instantanée** : en cas de détection de tampering, les clés sont zérisées **immédiatement** (avant tout autre opération, y compris la communication sur le bus)
+- **Protections physiques renforcées** : encapsuler le TPM dans un mastic détectable, utiliser des commutateurs anti-tamper redondants (au moins deux commutateurs indépendants)
+
+**Vraisemblance** : **V1 Peu probable** (nécessite un accès physique avancé, des compétences en ingénierie inverse matérielle, et un équipement de microscopie — accessible uniquement à des acteurs étatiques de haut niveau)
+
+**Gravité** : **G3 GRAVE** (si la KEK est extraite, tous les bundles de la flotte concernés peuvent être déchiffrés — impact potentiellement flotte-wide)
+
+---
+
 ### 4.3 Synthèse des scénarios opérationnels
 
 | Scénario | BS concernés | Vraisemblance | Gravité | Risque | Priorité |
@@ -1241,6 +1408,11 @@ SR9 (capture d'un device physique)
 | SO18 (forensique mémoire post-crash) | BS4 | V3 | G3 | ÉLEVÉ | 🔴 Haute |
 | SO19 (compromission flotte-wide) | BS3, BS4, BS9 | V3 | G4 | ÉLEVÉ | 🔴 Haute |
 | SO20 (re-provisionnement device capturé) | BS3, BS4, BS1 | V3 | G3 | ÉLEVÉ | 🔴 Haute |
+| SO21 (flash extraite, bundle offline) | BS1 | V3 | G4 | ÉLEVÉ | 🔴 Haute |
+| SO22 (serveur de distribution compromis) | BS1 | V3 | G4 | ÉLEVÉ | 🔴 Haute |
+| SO23 (bundle offline avec clé extraite) | BS1, BS4 | V2 | G3 | MOYEN | 🟠 Moyenne |
+| SO24 (exfiltration via manifeste jail) | BS5 | V2 | G3 | MOYEN | 🟠 Moyenne |
+| SO25 (contournement protections TPM) | BS3 | V1 | G3 | MOYEN | 🟠 Moyenne |
 
 ---
 
@@ -1270,6 +1442,11 @@ SR9 (capture d'un device physique)
 | R17 : Erreur de provisionnement — KEK incorrecte (SS14, SO17) | G4 | V4 | **CRITIQUE** | ❌ Inacceptable |
 | R18 : Compromission flotte-wide par KEK unique (SS15, SO19) | G4 | V3 | **ÉLEVÉ** | ❌ Inacceptable |
 | R19 : Re-provisionnement d'un device capturé (SS16, SO20) | G3 | V3 | **ÉLEVÉ** | ❌ Inacceptable |
+| R20 : Bundle offline créé à partir de flash extraite (SS19, SO21) | G4 | V3 | **ÉLEVÉ** | ❌ Inacceptable |
+| R21 : Substitution de payload par serveur de distribution compromis (SS20, SO22) | G4 | V3 | **ÉLEVÉ** | ❌ Inacceptable |
+| R22 : Rejeu offline de bundle avec clé de session extraite (SS21, SO23) | G3 | V2 | **MOYEN** | ⚠️ Tolérable (sous conditions) |
+| R23 : Exfiltration de données hôte via manifeste jail (SS22, SO24) | G3 | V2 | **MOYEN** | ⚠️ Tolérable (sous conditions) |
+| R24 : Contournement des protections physiques du TPM (SS23, SO25) | G3 | V1 | **FAIBLE** | ✅ Acceptable (hypothèses matérielles) |
 
 ### 5.2 Stratégie de traitement
 
@@ -1556,6 +1733,82 @@ SR9 (capture d'un device physique)
 
 ---
 
+#### R20 : Bundle offline créé à partir de flash extraite (ÉLEVÉ)
+
+**Stratégie** : **Réduction** (protection de la flash et de la chaîne de boot)
+
+**Mesures** :
+1. 🔲 **Verrou de production** : la flash contient un identifiant unique gravé en usine, lié à la KEK ; un bundle créé sans cet identifiant est rejeté
+2. 🔲 **Chiffrement hardware de la flash** : la flash elle-même est chiffrée (contrôleur de flash intégré) ; l'extraction brute sans la clé de chiffrement est impossible
+3. 🔲 **Chaîne de boot mesurée** : le bootloader mesure le firmware dans le TPM (PCR) ; un firmware modifié ne peut pas être exécuté
+4. 🔲 **Détection de dessoudage** : un capteur sur le PCB détecte l'absence de la puce flash ; la mise à jour est désactivée si la flash est absente
+5. 🔲 **Lien hardware entre flash et TPM** : la KEK dans le TPM est liée à l'identifiant de la flash (hash de l'ID de flash dans la policy de la KEK) ; une flash extraite ne peut pas déchiffrer de bundles destinés à un autre dispositif
+
+**Risque résiduel après traitement** : **MOYEN** (si la flash est chiffrée hardware et liée au TPM, l'extraction brute est inutile — reste le risque de compromission de la clé de signature (SO14) couplée à l'extraction)
+
+---
+
+#### R21 : Substitution de payload par serveur de distribution compromis (ÉLEVÉ)
+
+**Stratégie** : **Réduction** (intégrité du bundle complet)
+
+**Mesures** :
+1. 🔲 **Hash du payload complet dans le header** : le header contient un hash cryptographique du **payload entier** (pas seulement du manifeste) ; toute substitution de payload est détectée
+2. 🔲 **Signature du bundle complet** (header + payload) : signer le bundle complet élimine la possibilité de substituer le payload
+3. 🔲 **Vérification d'intégrité avant traitement** : le device vérifie le hash du bundle complet **avant** de tenter le déchiffrement
+4. 🔲 **Serveurs de distribution redondants** : le device télécharge le bundle depuis plusieurs serveurs indépendants et vérifie la cohérence (au moins 2/3 concordent)
+5. 🔲 **Signature de registre** : le serveur de distribution signe un registre public des hashes des bundles ; le device vérifie le hash du bundle dans le registre
+
+**Risque résiduel après traitement** : **MOYEN** (si le serveur de distribution est compromis ET qu'un attaquant contrôle aussi le registre public de validation, le bundle peut passer — nécessite une compromission multi-serveur coordonnée)
+
+---
+
+#### R22 : Rejeu offline de bundle avec clé de session extraite (MOYEN)
+
+**Stratégie** : **Réduction** (limitation de la réutilisabilité des bundles)
+
+**Mesures** :
+1. 🔲 **Bind hash du bundle à l'appareil** : le header contient le hash de l'identifiant matériel unique de l'appareil cible ; un bundle ne peut être installé que sur l'appareil pour lequel il a été créé
+2. 🔲 **Rotation de clé de session** : les clés de session sont renouvelées périodiquement ; une clé compromise n'expose que les bundles de la période de validité
+3. 🔲 **Période de validité du bundle** : un bundle expire après une durée donnée (horodatage signé dans le header) ; un bundle expiré est rejeté
+4. 🔲 **Counter dans le header** : le header contient un compteur incrémental ; un bundle avec un compteur obsolète est rejeté
+5. 🔲 **Rate limiting côté serveur** : limiter le nombre de bundles installables par appareil par période de temps
+
+**Risque résiduel après traitement** : **FAIBLE** (un bundle expiré avec un hash appareil-lié et un compteur invalide est rejeté — reste le risque d'installation sur l'appareil original pendant la période de validité)
+
+---
+
+#### R23 : Exfiltration de données hôte via manifeste jail (MOYEN)
+
+**Stratégie** : **Réduction** (isolement strict du jail)
+
+**Mesures** :
+1. 🔲 **Liste blanche des chemins de bind mount** : seuls les chemins explicitement autorisés (liste statique ou policy) sont permis ; les chemins non listés sont rejetés
+2. 🔲 **Vérification sémantique** : le supervisor vérifie que le contenu demandé correspond bien à un fichier de configuration légitime (pas un fichier sensible)
+3. 🔲 **Isolement de la sortie** : l'API de sortie contrôlée ne permet que des données structurées de taille bornée (pas de transfert de fichier arbitraire)
+4. 🔲 **Principe du moindre privilège** : le jail ne monte que ce qui est strictement nécessaire au payload (pas de accès en lecture aux fichiers de l'hôte sauf justification explicite)
+5. 🔲 **Audit du JailManifest** : un processus de revue indépendante valide chaque version de JailManifest avant déploiement
+
+**Risque résiduel après traitement** : **FAIBLE** (si les chemins de bind mount sont listés et le contenu validé sémantiquement, l'exfiltration de données sensibles est difficile — reste le risque de contournement par des noms de fichiers similaires)
+
+---
+
+#### R24 : Contournement des protections physiques du TPM (FAIBLE)
+
+**Stratégie** : **Acceptation** (risque faible, coût de mitigation élevé)
+
+**Mesures** :
+1. ✅ **Sessions chiffrées via EK/SRK ECC** (déjà spécifié) : protège contre l'écoute du bus TPM (A4)
+2. ✅ **Zéroisation des clés en cas de tampering** : si les commutateurs anti-tamper sont activés, les clés sont zérisées
+3. 🔲 **Détection physique du TPM** : le dispositif détecte la présence/absence du TPM (pin de présence connectée au supervisor) ; un TPM absent empêche toute mise à jour
+4. 🔲 **Stockage sécurisé des clés dans le TPM** : les clés sont stockées dans une zone protégée non accessible par accès physique direct aux broches
+5. 🔲 **Zéroisation instantanée** : en cas de détection de tampering, les clés sont zérisées avant toute autre opération (même avant la communication sur le bus)
+6. 🔲 **Protections physiques renforcées** : encapsuler le TPM dans un mastic détectable, utiliser des commutateurs anti-tamper redondants (au moins deux commutateurs indépendants)
+
+**Risque résiduel après traitement** : **FAIBLE** (reste le risque d'un attaquant étatique de haut niveau capable de neutraliser les protections physiques et d'extraire la KEK par FAI)
+
+---
+
 ### 5.3 Plan d'amélioration continue
 
 #### Priorité 1 : Critique (avant implémentation)
@@ -1574,6 +1827,15 @@ SR9 (capture d'un device physique)
 | Rendre `PolicyPCR` obligatoire et relier le reset du TPM au reset du SoC | Architecte, matériel | T+2 semaines | 🔲 À faire |
 | Spécifier le bundle de migration (police de KEK, procédure de re-provisionnement) | Architecte | T+4 semaines | 🔲 À faire |
 | Spécifier la politique de rotation de KEK et revocation list | Architecte | T+4 semaines | 🔲 À faire |
+| Spécifier le verrou de production de la flash (identifiant unique lié à la KEK) | Architecte, matériel | T+2 semaines | 🔲 À faire |
+| Spécifier le chiffrement hardware de la flash (contrôleur chiffré) | Architecte, matériel | T+4 semaines | 🔲 À faire |
+| Spécifier la signature du bundle complet (header + payload) dans le format de bundle | Architecte | T+4 semaines | 🔲 À faire |
+| Spécifier le protocole de vérification multi-sources pour les bundles | Architecte | T+4 semaines | 🔲 À faire |
+| Spécifier le binding du bundle à l'appareil (hash identifiant matériel dans le header) | Architecte | T+4 semaines | 🔲 À faire |
+| Spécifier la limite de validité temporelle des bundles (expiration signée) | Architecte | T+4 semaines | 🔲 À faire |
+| Spécifier la validation sémantique des chemins de bind mount dans le JailManifest | Architecte | T+4 semaines | 🔲 À faire |
+| Spécifier les protections physiques du TPM (mastic détectable, commutateurs redondants) | Architecte, matériel | T+4 semaines | 🔲 À faire |
+| Spécifier la détection physique du TPM (pin de présence) | Architecte, matériel | T+2 semaines | 🔲 À faire |
 
 #### Priorité 2 : Haute (pendant implémentation)
 
@@ -1591,6 +1853,12 @@ SR9 (capture d'un device physique)
 | Signer ou mesurer l'environnement U-Boot et vérifier le slot booté | Dev | T+6 semaines | 🔲 À faire |
 | Spécifier le bundle de migration (procédure de re-provisionnement) | Architecte | T+4 semaines | 🔲 À faire |
 | Spécifier la politique de rotation de KEK et revocation list | Architecte | T+4 semaines | 🔲 À faire |
+| Implémenter la vérification du hash du payload complet dans le header | Dev | T+4 semaines | 🔲 À faire |
+| Implémenter la signature du bundle complet (header + payload) | Dev | T+6 semaines | 🔲 À faire |
+| Implémenter le binding du bundle à l'appareil (hash identifiant matériel) | Dev | T+4 semaines | 🔲 À faire |
+| Implémenter la limite de validité temporelle des bundles (expiration signée) | Dev | T+4 semaines | 🔲 À faire |
+| Implémenter la validation sémantique des chemins de bind mount | Dev | T+4 semaines | 🔲 À faire |
+| Intégrer un protocole de vérification multi-sources (plusieurs serveurs) | Dev | T+6 semaines | 🔲 À faire |
 
 #### Priorité 3 : Moyenne (après MVP)
 
@@ -1605,6 +1873,8 @@ SR9 (capture d'un device physique)
 | Build reproductible, SBOM, signature des artefacts | Dev lead | T+12 semaines | 🔲 À faire |
 | Clé de signature en HSM, cérémonie de clés, double signature | Éditeur | T+12 semaines | 🔲 À faire |
 | Tests de glitching et de saturation du TPM sur matériel réel | QA | T+24 semaines | 🔲 À faire |
+| Audit de sécurité matérielle (protections physiques TPM, verrou de flash) | QA, matériel | T+24 semaines | 🔲 À faire |
+| Tests de contournement des protections physiques (mastic, commutateurs) | QA, matériel | T+24 semaines | 🔲 À faire |
 
 ### 5.4 Cadre de suivi des risques
 
