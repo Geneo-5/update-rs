@@ -1,6 +1,6 @@
 # Analyse EBIOS Risk Manager — update-rs
 
-Statut : Brouillon (première itération)
+Statut : Brouillon (deuxième itération)
 
 > Cette analyse suit la méthodologie **EBIOS Risk Manager** de l'ANSSI [[1]], structurée en 5 ateliers itératifs.
 
@@ -50,6 +50,8 @@ Statut : Brouillon (première itération)
 | **ER7** | Compromission de la KEK (extraction depuis le TPM) | VM1, VM2 | **G4 CRITIQUE** | Possibilité de déchiffrer tous les bundles passés et futurs (si même KEK), perte de confidentialité et d'authenticité |
 | **ER8** | Déni de service sur le mécanisme de mise à jour (exhaustion TPM, boucle infinie) | VM3 | **G2 SIGNIFICATIVE** | Device ne peut plus recevoir de mises à jour, doit être redémarré physiquement |
 | **ER9** | Divulgation de la configuration hôte (fichiers /etc, credentials, secrets locaux) | VM6 | **G3 GRAVE** | Exposition de mots de passe, clés SSH, certificats, configuration réseau, avantage pour attaques ultérieures |
+| **ER10** | Maintien prolongé sur une version vulnérable (mises à jour bloquées ou retardées sans que le device le sache) | VM1, VM3 | **G3 GRAVE** | Exploitation de vulnérabilités corrigées en amont, flotte exposée sans signal d'alerte |
+| **ER11** | Compromission durable de la confiance éditeur (clé de signature ou KEK volée, sans moyen de révocation) | VM1, VM2 | **G4 CRITIQUE** | L'attaquant peut produire des bundles acceptés par toute la flotte ; remise en état nécessitant une intervention sur chaque device |
 
 ### 1.5 Socle de sécurité (mesures spécifiées)
 
@@ -96,6 +98,12 @@ Le système repose sur les hypothèses de sécurité matérielle suivantes :
 | **Pas d'attestation distante** | Pas de `TPM2_Quote` pour prouver l'identité du TPM à un serveur distant | Impossible de détecter un TPM remplacé ou compromis |
 | **Pas de rotation des clés** | KEK et clé de signature statiques | Si compromise, tous les bundles passés et futurs sont compromis |
 | **Système A/B non intégré** | Spécifié (REQ-FLW-1 à 3) mais absent de la machine à états de `04-update-flow.md` et du code | Corruption possible si interruption pendant écriture MTD |
+| **Pas de révocation de clé** | Aucun mécanisme pour révoquer ou faire tourner la clé de vérification ECC ou la KEK une fois compromises | Compromission éditeur durable (SS6, ER11) |
+| **Pas de fraîcheur des mises à jour** | Ni expiration ni horodatage : un device peut être maintenu sur une version ancienne sans le savoir | Attaque freeze (SS8, ER10) |
+| **Chaîne d'approvisionnement non maîtrisée** | Pas de build reproductible, de SBOM ni de signature des artefacts de build ; audit des dépendances prévu (REQ-CRY-2) mais non en place | SS7 |
+| **TPM utilisable comme oracle** | La policy de la KEK autorise un digest de policy signé, pas un header donné (`03-tpm.md`, question 13) | Un détenteur de device peut utiliser son TPM pour déballer la clé de session de bundles de la flotte (SS13) |
+| **Canal de contrôle local non spécifié** | Le protocole `updatectl` ↔ `updated` (authentification, droits, entrées acceptées) n'est pas décrit | SO11 |
+| **Protocole de commit non défini** | L'ordre écriture du slot / vérification / incrément du compteur NV (REQ-TPM-3) n'est pas spécifié de bout en bout | SO8 |
 
 ---
 
@@ -113,19 +121,23 @@ Le système repose sur les hypothèses de sécurité matérielle suivantes :
 | **SR6** | Éditeur malveillant ou compromis | Signer un bundle contenant une backdoor | Très élevées (accès à la clé de signature) | Faibles (pas besoin de compétence technique) |
 | **SR7** | Payload malveillant (jail) | Échapper au sandbox, escalader les privilèges | Faibles (code dans le jail) | Élevées (exploitation de vulnérabilités jail, kernel) |
 | **SR8** | État-nation (APT) | Compromission persistante, exfiltration de données | Très élevées (zero-days, supply chain) | Très élevées (cryptographie, hardware, reverse engineering) |
+| **SR9** | Propriétaire ou opérateur du device (malveillant) | Extraire le contenu des bundles, contourner les restrictions de l'éditeur, redistribuer | Moyennes (device légitime, accès root, bundles publics) | Moyennes à élevées (administration système, tpm2-tools) |
+| **SR10** | Attaquant sur la chaîne d'approvisionnement logicielle (dépendances, build, CI) | Introduire du code malveillant en amont, avant signature | Élevées (compte mainteneur, CI, dépôt de paquets) | Élevées (ingénierie logicielle, social engineering) |
 
 ### 2.2 Objectifs visés par les sources de risque
 
 | OV | Objectif visé | SR concernées |
 |---|---|---|
-| **OV1** | Installer un firmware malveillant (backdoor, botnet) | SR1, SR3, SR5, SR6, SR8 |
-| **OV2** | Divulguer le contenu d'un bundle (propriété intellectuelle, secrets) | SR2, SR3, SR4, SR8 |
+| **OV1** | Installer un firmware malveillant (backdoor, botnet) | SR1, SR3, SR5, SR6, SR8, SR10 |
+| **OV2** | Divulguer le contenu d'un bundle (propriété intellectuelle, secrets) | SR2, SR3, SR4, SR8, SR9 |
 | **OV3** | Bricker le device (déni de service) | SR1, SR3, SR5, SR7 |
 | **OV4** | Abaisser le compteur anti-rollback (exploiter vulnérabilités connues) | SR3, SR5, SR8 |
 | **OV5** | Échapper au jail et compromettre l'hôte | SR7 |
 | **OV6** | Extraire la KEK (déchiffrer tous les bundles) | SR4, SR5, SR8 |
 | **OV7** | Supprimer les logs (masquer une compromission) | SR5, SR7 |
 | **OV8** | Divulguer la configuration hôte (credentials, secrets locaux) | SR3, SR5, SR7, SR8 |
+| **OV9** | Maintenir des devices sur une version vulnérable (bloquer ou retarder les correctifs) | SR1, SR5, SR8 |
+| **OV10** | Usurper l'état de la plateforme pour faire valider une policy du TPM | SR3, SR4 |
 
 ### 2.3 Couples SR/OV retenus (prioritaires)
 
@@ -140,8 +152,15 @@ Le système repose sur les hypothèses de sécurité matérielle suivantes :
 | **SR2/OV2** | Détenteur bundle divulgue le contenu | 🟠 Moyenne |
 | **SR5/OV8** | Root divulgue configuration hôte | 🟠 Moyenne |
 | **SR7/OV8** | Payload divulgue configuration hôte | 🟠 Moyenne |
-| **SR6/OV1** | Éditeur signe bundle malveillant | 🟡 Faible (traité par organisation des clés) |
+| **SR6/OV1** | Éditeur (ou sa clé) signe un bundle malveillant | 🟠 Moyenne (voir SS6 : l'organisation des clés est hors périmètre, mais l'absence de révocation est dans le projet) |
 | **SR8/* ** | APT (tous objectifs) | 🟡 Faible (hors périmètre actuel, défense en profondeur) |
+| **SR10/OV1** | Supply chain logicielle installe un firmware malveillant | 🔴 Haute |
+| **SR1/OV9** | Freeze ou downgrade pour maintenir une version vulnérable | 🟠 Moyenne |
+| **SR1/OV3, SR5/OV3, SR7/OV3** | Déni de service ou brick (coupure, saturation, canal de contrôle) | 🟠 Moyenne |
+| **SR4/OV10** | Reset du TPM et rejeu des mesures de plateforme | 🟠 Moyenne |
+| **SR9/OV2** | Propriétaire du device divulgue le contenu d'un bundle | 🟠 Moyenne |
+| **SR7/OV7** | Payload sature ou falsifie les logs | 🟡 Faible |
+| **SR3/OV1 (fautes)** | Injection de fautes sur le SoC pour contourner la vérification | 🟡 Faible (hypothèses matérielles, 1.6) |
 
 ---
 
@@ -346,6 +365,240 @@ SR4 (accès physique bus TPM SPI/I2C)
 
 ---
 
+#### SS6 : Compromission de la clé de signature éditeur (SR6, SR8 → OV1)
+
+**Chemin d'attaque** :
+```
+SR6/SR8 (accès à la clé privée de signature ECDSA P-256)
+  │
+  ├─▶ Signe un header et un manifeste malveillants
+  │   │
+  │   └─▶ TPM2_VerifySignature réussit : la signature est valide
+  │
+  ├─▶ Doit aussi fournir un wrapped_session_key que le device sait déballer
+  │   │
+  │   ├─▶ Soit en le produisant avec la KEK (symétrique, détenue côté éditeur) : stockée à part de la
+  │   │   clé de signature, la compromission de la seule clé de signature ne suffit pas
+  │   └─▶ Soit en réutilisant le wrapped_session_key d'un bundle existant dont il connaît la clé de
+  │       session, obtenue en utilisant un device comme oracle (SS13, SO16)
+  │
+  ├─▶ Incrémente bundle_version pour passer l'anti-rollback
+  │
+  └─▶ Aucune révocation : la clé de vérification est fixe à vie du dispositif (écart 1.7)
+```
+
+Si la KEK est commune à toute la flotte et stockée avec la clé de signature, un seul vol compromet tous les devices. Tant que le TPM peut servir d'oracle (SS13), la séparation entre clé de signature et KEK n'apporte pas de protection réelle.
+
+**Gravité** : **G4 CRITIQUE** (ER1, ER11)
+
+**Vraisemblance** : **V2 Vraisemblable** (la clé est une cible de choix ; l'organisation des clés est hors périmètre, mais l'absence de révocation est dans le projet)
+
+**Risque résiduel** : **ÉLEVÉ**
+
+---
+
+#### SS7 : Compromission de la chaîne d'approvisionnement logicielle (SR10 → OV1)
+
+**Chemin d'attaque** :
+```
+SR10 (compte mainteneur, dépôt de paquets, CI, toolchain de cross-compilation)
+  │
+  ├─▶ Publie une version malveillante d'une dépendance (crypto, TPM, parsing)
+  │   │
+  │   └─▶ Cargo.lock versionné, cargo audit/vet/deny (REQ-CRY-2) : prévus, pas en place
+  │
+  ├─▶ Modifie `updated` ou `bundle-tool` pendant le build
+  │   │
+  │   └─▶ Pas de build reproductible ni de signature des artefacts : non détecté
+  │
+  └─▶ Un `updated` piégé court-circuite les vérifications logicielles, ou un `bundle-tool` piégé
+      signe/chiffre autre chose que ce qui a été validé
+      │
+      └─▶ Seule la chaîne de boot vérifiée (non spécifiée) détecterait un `updated` modifié
+```
+
+La TCB inclut des composants C (`tpm2-tss` via `tss-esapi`, toolchain `gcc-arm-linux-gnueabihf`) en plus des crates Rust.
+
+**Gravité** : **G4 CRITIQUE** (ER1)
+
+**Vraisemblance** : **V2 Vraisemblable**
+
+**Risque résiduel** : **ÉLEVÉ**
+
+---
+
+#### SS8 : Downgrade et freeze (SR1, SR5, SR8 → OV4, OV9)
+
+**Chemin d'attaque** :
+```
+SR1/SR5/SR8 (réseau, serveur de distribution compromis, ou accès local)
+  │
+  ├─▶ Downgrade : rejoue un ancien bundle valablement signé
+  │   │
+  │   └─▶ Rejeté si bundle_version ≤ compteur NV (REQ-TPM-3) ou min_firmware_version non satisfait
+  │
+  ├─▶ Freeze : bloque ou ralentit la distribution, ne sert que des bundles déjà installés
+  │   │
+  │   └─▶ Aucune expiration ni horodatage : le device reste indéfiniment sur une version
+  │       vulnérable sans le savoir (écart 1.7)
+  │
+  └─▶ Mix-and-match de composants (noyau d'une version, rootfs d'une autre)
+      │
+      └─▶ Couvert seulement si un bundle porte un jeu cohérent d'images (question ouverte 3 de `02`)
+```
+
+**Gravité** : **G3 GRAVE** (ER6, ER10)
+
+**Vraisemblance** : **V3 Très vraisemblable** (le freeze ne demande qu'un contrôle du transport, et rien ne le détecte)
+
+**Risque résiduel** : **ÉLEVÉ** (le downgrade est traité, le freeze ne l'est pas)
+
+---
+
+#### SS9 : Déni de service et brick (SR1, SR5, SR7 → OV3)
+
+**Chemin d'attaque** :
+```
+SR1/SR5/SR7
+  │
+  ├─▶ Coupe l'alimentation ou le réseau pendant l'écriture du slot
+  │   │
+  │   └─▶ Slot corrompu ; l'A/B est spécifié (REQ-FLW-1 à 3) mais non intégré à la machine à états
+  │
+  ├─▶ Sature le stockage ou la RAM (tmpfs du jail, bundle volumineux)
+  │   │
+  │   └─▶ Limites cgroups et bornes mémoire (REQ-BUN-5 ; cgroups dans `06-jail.md`), spécifiées
+  │
+  ├─▶ Inonde le service de requêtes (TPM, canal de contrôle local)
+  │   │
+  │   └─▶ Rate limiting et backoff (A11 dans `07`), spécifiés ; canal de contrôle non spécifié
+  │
+  └─▶ Bundle authentique mais défectueux (erreur de l'éditeur) installé sur toute la flotte
+      │
+      └─▶ Ni health-check ni rollback automatique spécifiés de bout en bout
+```
+
+**Gravité** : **G3 GRAVE** (ER3, ER8)
+
+**Vraisemblance** : **V3 Très vraisemblable** (en l'absence d'A/B et de protocole de commit)
+
+**Risque résiduel** : **ÉLEVÉ**
+
+---
+
+#### SS10 : Exfiltration de la configuration hôte par le payload (SR7 → OV8)
+
+**Chemin d'attaque** :
+```
+SR7 (payload dans le jail)
+  │
+  ├─▶ Lit des fichiers hôte via un bind mount
+  │   │
+  │   └─▶ Policy machine (whitelist), lecture seule, MS_NOSYMFOLLOW, openat2 (SS4, SO2)
+  │
+  ├─▶ Exfiltre par le réseau
+  │   │
+  │   └─▶ CLONE_NEWNET : réseau toujours isolé
+  │
+  ├─▶ Exfiltre par l'API de sortie contrôlée (logs) ou le code retour
+  │   │
+  │   └─▶ Capture par le superviseur (REQ-JAIL-10) ; taille et format de la sortie non bornés
+  │
+  └─▶ Écrit des données hôte dans le slot ou la partition cible, lues plus tard par un attaquant physique
+      │
+      └─▶ Non traité : le contenu écrit par le payload n'est pas contrôlé par le superviseur
+```
+
+**Gravité** : **G3 GRAVE** (ER9)
+
+**Vraisemblance** : **V2 Vraisemblable**
+
+**Risque résiduel** : **MOYEN**
+
+---
+
+#### SS11 : Usurpation de l'état de plateforme par reset du TPM (SR4, SR3 → OV10, OV2)
+
+**Chemin d'attaque** :
+```
+SR4/SR3 (accès physique au TPM : bus SPI et ligne de reset)
+  │
+  ├─▶ Réinitialise le TPM sans redémarrer le SoC
+  │
+  ├─▶ Rejoue des extensions de PCR correspondant à un boot sain (mesures enregistrées avant)
+  │   │
+  │   └─▶ Satisfait un PolicyPCR : toute protection reposant sur les seuls PCR est défaite
+  │
+  └─▶ Demande le déballage de wrapped_session_key avec la signature de policy lue sur le device
+      │
+      └─▶ PolicyAuthorize ne protège pas ici : la signature de policy n'est pas un secret (elle est
+          fournie au TPM à chaque mise à jour) ; seul l'état des PCR s'oppose à la demande
+```
+
+**Gravité** : **G3 GRAVE** (ER2 ; la KEK reste dans le TPM, mais la clé de session d'un bundle est livrée)
+
+**Vraisemblance** : **V2 Vraisemblable** (accès physique requis, attaque documentée sur les TPM discrets)
+
+**Risque résiduel** : **MOYEN**
+
+---
+
+#### SS12 : Injection de fautes sur le SoC (SR8, SR3 → OV1, OV6)
+
+**Chemin d'attaque** :
+```
+SR8/SR3 (glitching tension/horloge, injection de fautes électromagnétique)
+  │
+  ├─▶ Saute la vérification de signature du bootloader (secure boot SoC)
+  │   │
+  │   └─▶ Hypothèse matérielle (1.6), hors périmètre de `update-rs`
+  │
+  ├─▶ Saute un test logiciel dans `updated` (résultat de la vérification de signature)
+  │   │
+  │   └─▶ Le déballage reste conditionné par la policy du TPM, mais la vérification du header est
+  │       séquencée par le logiciel (question 13 de `03`) : un header non authentique peut être présenté
+  │
+  └─▶ Extrait des secrets du TPM par fautes ou canaux auxiliaires
+      │
+      └─▶ Hors périmètre (certification du composant)
+```
+
+**Gravité** : **G4 CRITIQUE** (ER1, ER7)
+
+**Vraisemblance** : **V1 Peu vraisemblable** (équipement et compétences élevés, accès physique)
+
+**Risque résiduel** : **FAIBLE** (accepté au titre des hypothèses matérielles)
+
+---
+
+#### SS13 : Divulgation du contenu par le propriétaire du device (SR9, SR2 → OV2)
+
+**Chemin d'attaque** :
+```
+SR9 (propriétaire ou opérateur, root sur un device légitime)
+  │
+  ├─▶ Exécute `updated` avec un bundle légitime
+  │   │
+  │   ├─▶ Lit la clé de session en RAM (SO3)
+  │   └─▶ Lit le payload extrait ou le contenu du tmpfs du jail (root sur l'hôte)
+  │
+  ├─▶ Utilise son TPM comme oracle de déchiffrement pour d'autres bundles de la même KEK
+  │   │
+  │   └─▶ Possible tant que la policy n'est pas liée au header (question 13 de `03`)
+  │
+  └─▶ Redistribue le contenu
+```
+
+Limite du modèle : la confidentialité est opposable aux attaquants sans device légitime (A1 à A4), pas à celui qui contrôle le device. Avec une KEK commune à la flotte, un seul device ouvre tous les bundles de la flotte ; une KEK par device ou par famille (question 6 de `00`) limiterait l'exposition. La clé de session étant unique par bundle, l'extraction de l'une d'elles n'expose que ce bundle.
+
+**Gravité** : **G3 GRAVE** (ER2)
+
+**Vraisemblance** : **V4 Quasi certain** (pour qui contrôle un device)
+
+**Risque résiduel** : **ÉLEVÉ** (arbitrage requis, voir R16)
+
+---
+
 ### 3.3 Synthèse des scénarios stratégiques
 
 | Scénario | Gravité | Vraisemblance | Risque résiduel | Priorité |
@@ -355,6 +608,14 @@ SR4 (accès physique bus TPM SPI/I2C)
 | SS3 (local root) | G4 | V3 | ÉLEVÉ | 🔴 Haute |
 | SS4 (évasion jail) | G4 | V2 | MOYEN | 🟠 Moyenne |
 | SS5 (bus TPM) | G4 | V1 | FAIBLE | 🟢 Basse |
+| SS6 (clé de signature éditeur) | G4 | V2 | ÉLEVÉ | 🔴 Haute |
+| SS7 (supply chain) | G4 | V2 | ÉLEVÉ | 🔴 Haute |
+| SS8 (downgrade / freeze) | G3 | V3 | ÉLEVÉ | 🔴 Haute |
+| SS9 (DoS / brick) | G3 | V3 | ÉLEVÉ | 🔴 Haute |
+| SS10 (exfiltration par le payload) | G3 | V2 | MOYEN | 🟠 Moyenne |
+| SS11 (reset TPM, rejeu PCR) | G3 | V2 | MOYEN | 🟠 Moyenne |
+| SS12 (injection de fautes) | G4 | V1 | FAIBLE | 🟢 Basse |
+| SS13 (propriétaire du device) | G3 | V4 | ÉLEVÉ | 🟠 Moyenne (arbitrage) |
 
 ---
 
@@ -372,6 +633,10 @@ SR4 (accès physique bus TPM SPI/I2C)
 | **BS6** | Stockage MTD/eMMC | Firmware installé, configuration | 🔴 Critique |
 | **BS7** | Bootloader (U-Boot) | Chaîne de boot, vérification kernel | 🔴 Critique |
 | **BS8** | Kernel Linux | Syscalls, namespaces, cgroups | 🔴 Critique |
+| **BS9** | Poste de signature, CI et dépôts de dépendances | Clé privée de signature, KEK côté éditeur, build de `updated` et de `bundle-tool` | 🔴 Critique |
+| **BS10** | Canal de contrôle local (`updatectl` ↔ `updated`) | Déclenchement et suivi des mises à jour | 🟠 Haute |
+| **BS11** | Journalisation (journald, logs hôte) | Traçabilité (VM4), sortie du payload | 🟠 Haute |
+| **BS12** | Environnement du bootloader et sélection de slot | Choix du slot booté, paramètres de boot | 🔴 Critique |
 
 ### 4.2 Scénarios opérationnels (détail technique)
 
@@ -494,6 +759,251 @@ SR4 (accès physique bus TPM SPI/I2C)
 
 ---
 
+#### SO6 : Reset du TPM et rejeu des PCR (SR4 → BS3, BS7) — SS11
+
+**Enchaînement d'actions** :
+1. **SR4** accède physiquement à la ligne de reset du TPM et au bus SPI
+2. **SR4** enregistre les extensions de PCR d'un boot sain (bus SPI)
+3. **SR4** modifie le bootloader ou le kernel, redémarre, puis réinitialise le TPM sans réinitialiser le SoC
+4. **SR4** rejoue les extensions de PCR enregistrées : les PCR affichent un état sain
+5. **BS3** (TPM) voit un état de PCR conforme ; **SR4** présente la signature de policy lue sur le device et demande le déballage de la clé de session d'un bundle capturé
+
+**Mitigations existantes** :
+- Aucune mitigation efficace dans la spécification actuelle : `PolicyAuthorize` repose sur une signature de policy non secrète, et `PolicyPCR` est optionnelle
+- Sessions chiffrées TPM : sans effet, l'attaquant parle au TPM par son propre canal
+
+**Mitigations manquantes** :
+- `PolicyPCR` obligatoire (optionnelle dans `03-tpm.md`)
+- Ligne de reset du TPM reliée au reset du SoC (matériel)
+- Lier la policy au header (question 13 de `03`), sinon le TPM sert d'oracle (SO16)
+
+**Vraisemblance** : **V2 Vraisemblable**
+
+**Gravité** : **G3 GRAVE** (ER2)
+
+---
+
+#### SO7 : Retour sur un ancien slot via l'environnement du bootloader (SR3, SR5 → BS12) — SS8
+
+**Enchaînement d'actions** :
+1. **SR5** (root) ou **SR3** (flash hors tension) modifie la variable de sélection de slot dans l'environnement U-Boot
+2. Le device démarre sur l'ancien slot, qui contient une version vulnérable mais authentique
+3. Le compteur NV du TPM, qui ne porte que sur les bundles installés, ne détecte rien
+4. **SR5** exploite une vulnérabilité connue de l'ancienne version
+
+**Mitigations existantes** :
+- Compteur NV anti-rollback (bundles installés uniquement)
+
+**Mitigations manquantes** :
+- Environnement U-Boot signé, en lecture seule ou mesuré dans un PCR
+- Vérification, au boot, de la version du slot démarré contre le compteur NV
+- Intégration de l'A/B dans la spécification (`04-update-flow.md`)
+
+**Vraisemblance** : **V2 Vraisemblable** (dépend du modèle A/B retenu)
+
+**Gravité** : **G3 GRAVE** (ER6)
+
+---
+
+#### SO8 : Coupure d'alimentation pendant le commit (SR1, SR3 → BS1, BS6) — SS9
+
+**Enchaînement d'actions** :
+1. **BS1** valide le bundle et écrit les images dans le slot cible
+2. **SR3** coupe l'alimentation pendant l'écriture MTD, ou à l'instant du commit
+3. Cas A : le slot est partiellement écrit et le compteur n'est pas incrémenté → slot corrompu ; sans A/B intégré, le device peut ne plus démarrer
+4. Cas B (si l'incrément précède la fin de l'écriture) : le compteur NV est incrémenté mais l'écriture est incomplète → le même bundle est ensuite rejeté par l'anti-rollback alors que le slot reste incomplet (la version est « consommée »)
+
+**Mitigations existantes** :
+- REQ-TPM-3 : incrément du compteur seulement après validation (commit)
+- A/B spécifié (REQ-FLW-1 à 3)
+
+**Mitigations manquantes** :
+- Protocole de commit atomique défini de bout en bout (écriture, relecture et vérification, bascule du slot, incrément du compteur) avec reprise après coupure
+- Health-check et watchdog au premier boot du nouveau slot
+
+**Vraisemblance** : **V3 Très vraisemblable** (coupure accidentelle comprise)
+
+**Gravité** : **G3 GRAVE** (ER3)
+
+---
+
+#### SO9 : Header ou manifeste hostile avant authentification (SR1 → BS1, BS2) — SS9
+
+**Enchaînement d'actions** :
+1. **SR1** sert un fichier dont le header (512 octets, non authentifié à ce stade) porte `chunk_count` ou `chunk_size` extrêmes
+2. **BS1** lit le header ; une implémentation qui dimensionne un buffer ou une boucle sur ces valeurs avant la vérification TPM épuise la RAM ou le CPU
+3. Variante : un bundle authentique d'un éditeur compromis (SS6) porte un manifeste de taille démesurée, tamponné en entier avant vérification du tag
+
+**Mitigations existantes** :
+- Ordre de validation de `02` : les étapes 2 à 5 ne font que comparer des champs non authentifiés ; la signature est vérifiée à l'étape 7, avant tout dimensionnement fondé sur `chunk_size` ou `chunk_count`
+- REQ-BUN-5 (mémoire bornée), REQ-BUN-6 (pas d'allocation pilotée par une valeur non authentifiée)
+
+**Mitigations manquantes** :
+- Bornes numériques maximales (`chunk_size`, `chunk_count`, taille du manifeste : questions 6 et 8 de `02`)
+- Fuzzing du parseur de header
+
+**Vraisemblance** : **V2 Vraisemblable**
+
+**Gravité** : **G2 SIGNIFICATIVE** (ER8)
+
+---
+
+#### SO10 : Épuisement des ressources du TPM (SR5, SR1 → BS3) — SS9
+
+**Enchaînement d'actions** :
+1. **SR5** (ou **SR1** si le déclenchement est distant) lance de nombreuses tentatives de mise à jour avec des headers invalides
+2. Chaque tentative ouvre des sessions et des séquences de hash dans le TPM
+3. Les ressources internes du TPM (sessions chargées, séquences, mémoire) sont saturées (un verrouillage anti-bruteforce n'est à craindre que si des autorisations par `authValue` sont en jeu)
+4. Les mises à jour légitimes échouent jusqu'au redémarrage ou à l'expiration du verrouillage
+
+**Mitigations existantes** :
+- Rate limiting et backoff exponentiel (A11 dans `07`)
+- Vérification de magic, version et taille avant tout appel TPM (filtre faible : un header bien formé suffit à le passer)
+
+**Mitigations manquantes** :
+- Libération systématique des sessions et séquences (gestion RAII, resource manager `/dev/tpmrm0`)
+- Test de saturation sur un TPM réel (nombre de sessions simultanées)
+
+**Vraisemblance** : **V3 Très vraisemblable**
+
+**Gravité** : **G2 SIGNIFICATIVE** (ER8)
+
+---
+
+#### SO11 : Abus du canal de contrôle local (SR5 → BS10) — SS9
+
+**Enchaînement d'actions** :
+1. **SR5** (compte local non privilégié) se connecte au canal d'`updated` utilisé par `updatectl`
+2. **SR5** demande une mise à jour depuis un chemin ou une URL de son choix, annule une mise à jour en cours, ou en déclenche en boucle
+3. Variante : le chemin fourni est un lien symbolique ou une course (TOCTOU) vers un fichier choisi par l'attaquant
+4. **BS1** traite l'entrée avec les privilèges root
+
+**Mitigations existantes** :
+- `updated` s'exécute en root et traite tout bundle comme hostile (REQ-THR-7), signature obligatoire
+
+**Mitigations manquantes** :
+- Spécification du protocole de contrôle : droits du socket, vérification des identifiants du pair (`SO_PEERCRED`), liste des commandes autorisées
+- Aucun chemin ou URL fourni par le client : source configurée côté serveur
+- Journalisation de chaque demande
+
+**Vraisemblance** : **V2 Vraisemblable**
+
+**Gravité** : **G3 GRAVE**
+
+---
+
+#### SO12 : Saturation et falsification des logs par le payload (SR7 → BS11) — SS10
+
+**Enchaînement d'actions** :
+1. **SR7** (payload) écrit un volume énorme sur stdout/stderr, ou des lignes imitant des événements du superviseur (succès de vérification, fin de mise à jour)
+2. **BS11** journalise la sortie captée (REQ-JAIL-10) ; la rotation des logs écrase les événements précédents
+3. Les traces d'une compromission antérieure (ER4) sont perdues ou noyées
+4. Variante : la sortie sert de canal d'exfiltration (SS10)
+
+**Mitigations existantes** :
+- Sortie capturée par le superviseur ; limites cgroups (CPU, mémoire, I/O)
+
+**Mitigations manquantes** :
+- Quota de sortie par exécution, préfixe ou champ structuré non falsifiable distinguant les événements du superviseur
+- Journal des événements critiques séparé de la sortie du payload, avec extension d'un PCR (`07` § 4.2)
+
+**Vraisemblance** : **V3 Très vraisemblable**
+
+**Gravité** : **G2 SIGNIFICATIVE** (ER4)
+
+---
+
+#### SO13 : Dépendance malveillante dans le build (SR10 → BS9) — SS7
+
+**Enchaînement d'actions** :
+1. **SR10** prend le contrôle du compte d'un mainteneur d'une crate utilisée (crypto, TPM, parsing) et publie une version piégée
+2. Un `cargo update`, ou la résolution d'une dépendance transitive, intègre cette version
+3. La CI compile `updated` et `bundle-tool`, signés ensuite normalement par l'éditeur
+4. Le code piégé s'exécute en root sur les devices, ou exfiltre des clés côté éditeur
+
+**Mitigations existantes** :
+- Versions épinglées et `Cargo.lock` versionné (REQ-CRY-2)
+- Primitives issues des bibliothèques des projets de l'ANSSI (REQ-CRY-1)
+
+**Mitigations manquantes** :
+- `cargo audit`, `cargo vet` et `cargo deny` actifs en CI
+- Vendoring des dépendances, revue de chaque mise à jour sur les crates critiques
+- Build reproductible, SBOM, signature des artefacts de build
+
+**Vraisemblance** : **V2 Vraisemblable**
+
+**Gravité** : **G4 CRITIQUE**
+
+---
+
+#### SO14 : Vol de la clé de signature sur le poste de build (SR6, SR8 → BS9) — SS6
+
+**Enchaînement d'actions** :
+1. **SR8** compromet le poste ou la CI qui exécute `bundle-tool`
+2. **SR8** exfiltre la clé privée de signature (et la KEK si elle est stockée au même endroit)
+3. **SR8** produit hors ligne des bundles malveillants valides pour les devices dont il détient la KEK, ou, sans la KEK, en réutilisant un `wrapped_session_key` dont il connaît la clé de session (obtenue par SO16)
+4. Sans révocation, aucune mise à jour légitime ne peut « reprendre la main » sans intervention sur chaque device
+
+**Mitigations existantes** :
+- Création des bundles hors ligne (REQ-BUN-1)
+- Signatures hybrides prévues pour les artefacts internes (`05`, emplacement non spécifié : question 9 de `02`)
+
+**Mitigations manquantes** :
+- Clé de signature en HSM, cérémonie de clés, KEK stockée séparément
+- Double signature ou quorum pour les releases
+- Mécanisme de révocation et de rotation de la clé de vérification (NV index)
+- Journal d'audit des signatures
+
+**Vraisemblance** : **V2 Vraisemblable**
+
+**Gravité** : **G4 CRITIQUE** (ER1, ER11)
+
+---
+
+#### SO15 : Réordonnancement, troncature et mélange de chunks (SR1 → BS1, BS2) — SS1
+
+**Enchaînement d'actions** :
+1. **SR1** intercepte le bundle et réordonne deux chunks, supprime le dernier, ou duplique un chunk
+2. **SR1** insère un chunk issu d'un autre bundle signé pour le même device
+3. **BS2** (worker) déchiffre dans l'ordre
+4. Chaque modification est détectée par l'AEAD
+
+**Mitigations existantes** :
+- AAD structurée (`bundle_id`, `chunk_index`, `chunk_count`, `is_last_chunk`, `chunk_data_length`) et validation séquentielle (REQ-BUN-12 à 14)
+- Clé et nonce dérivés par chunk depuis une clé de session unique par bundle : un chunk d'un autre bundle ne s'authentifie pas (REQ-BUN-15)
+
+**Mitigations manquantes** :
+- Vecteurs de test négatifs et fuzzing du lecteur de chunks
+
+**Vraisemblance** : **V1 Peu vraisemblable**
+
+**Gravité** : **G4 CRITIQUE** (si accepté → ER1)
+
+---
+
+#### SO16 : TPM utilisé comme oracle de déchiffrement (SR9 → BS3, BS4) — SS13
+
+**Enchaînement d'actions** :
+1. **SR9** (root sur un device légitime) récupère un bundle chiffré pour la même KEK, par exemple depuis le serveur de distribution
+2. **SR9** envoie directement au TPM (`/dev/tpmrm0`, sans `updated`) la signature de policy déjà fournie avec le dispositif, puis `wrapped_session_key` (la commande de déballage reste à confirmer, voir l'avertissement de `03`)
+3. **BS3** (TPM) satisfait la policy, car `PolicyAuthorize` n'est pas liée au header
+4. **SR9** récupère la clé de session, en dérive les clés de chunk (HKDF, entrées publiques) et déchiffre le bundle hors ligne
+
+**Mitigations existantes** :
+- Clé de session unique par bundle et clés par chunk : une extraction n'expose que le bundle concerné
+- Sessions chiffrées TPM (protègent contre le bus, pas contre root)
+
+**Mitigations manquantes** :
+- Lier la policy de la KEK au header ou au bundle (question 13 de `03`)
+- KEK par device ou par famille (question 6 de `00`)
+- Restriction d'accès à `/dev/tpmrm0` (LSM, droits), à envisager en défense en profondeur seulement (root la contourne)
+
+**Vraisemblance** : **V4 Quasi certain** (pour qui contrôle un device)
+
+**Gravité** : **G3 GRAVE** (ER2)
+
+---
+
 ### 4.3 Synthèse des scénarios opérationnels
 
 | Scénario | BS concernés | Vraisemblance | Gravité | Risque | Priorité |
@@ -503,6 +1013,17 @@ SR4 (accès physique bus TPM SPI/I2C)
 | SO3 (extraction session key) | BS4 | V3 | G3 | ÉLEVÉ | 🔴 Haute |
 | SO4 (anti-rollback fichier) | BS6 | V1 | G3 | FAIBLE | 🟢 Basse |
 | SO5 (réinitialisation TPM) | BS3 | V2 | G3 | MOYEN | 🟠 Moyenne |
+| SO6 (reset TPM, rejeu PCR) | BS3, BS7 | V2 | G3 | MOYEN | 🟠 Moyenne |
+| SO7 (retour sur ancien slot) | BS12 | V2 | G3 | MOYEN | 🟠 Moyenne |
+| SO8 (coupure pendant le commit) | BS1, BS6 | V3 | G3 | ÉLEVÉ | 🔴 Haute |
+| SO9 (header hostile pré-auth) | BS1, BS2 | V2 | G2 | MOYEN | 🟠 Moyenne |
+| SO10 (épuisement du TPM) | BS3 | V3 | G2 | MOYEN | 🟠 Moyenne |
+| SO11 (canal de contrôle local) | BS10 | V2 | G3 | MOYEN | 🟠 Moyenne |
+| SO12 (logs saturés ou falsifiés) | BS11 | V3 | G2 | MOYEN | 🟠 Moyenne |
+| SO13 (dépendance malveillante) | BS9 | V2 | G4 | ÉLEVÉ | 🔴 Haute |
+| SO14 (vol de la clé de signature) | BS9 | V2 | G4 | ÉLEVÉ | 🔴 Haute |
+| SO15 (chunks réordonnés ou mélangés) | BS1, BS2 | V1 | G4 | FAIBLE | 🟢 Basse |
+| SO16 (TPM comme oracle) | BS3, BS4 | V4 | G3 | ÉLEVÉ | 🟠 Moyenne (arbitrage) |
 
 ---
 
@@ -520,6 +1041,14 @@ SR4 (accès physique bus TPM SPI/I2C)
 | R6 : Attaque réseau | G4 | V1 | **FAIBLE** | ✅ Acceptable |
 | R7 : Abaissement anti-rollback (fichier) | G3 | V1 | **FAIBLE** | ✅ Acceptable |
 | R8 : Extraction KEK via bus TPM | G4 | V1 | **FAIBLE** | ✅ Acceptable |
+| R9 : Compromission de la clé de signature éditeur (SS6, SO14) | G4 | V2 | **ÉLEVÉ** | ❌ Inacceptable |
+| R10 : Compromission de la chaîne d'approvisionnement logicielle (SS7, SO13) | G4 | V2 | **ÉLEVÉ** | ❌ Inacceptable |
+| R11 : Freeze et maintien sur version vulnérable (SS8, SO7) | G3 | V3 | **ÉLEVÉ** | ❌ Inacceptable |
+| R12 : Déni de service et brick (SS9, SO8 à SO11) | G3 | V3 | **ÉLEVÉ** | ❌ Inacceptable |
+| R13 : Exfiltration ou falsification via le payload (SS10, SO12) | G3 | V2 | **MOYEN** | ⚠️ Tolérable (sous conditions) |
+| R14 : Reset du TPM et rejeu de PCR (SS11, SO6) | G3 | V2 | **MOYEN** | ⚠️ Tolérable (sous conditions) |
+| R15 : Injection de fautes sur le SoC (SS12) | G4 | V1 | **FAIBLE** | ✅ Acceptable (hypothèses matérielles) |
+| R16 : Divulgation par le propriétaire du device, TPM comme oracle (SS13, SO16) | G3 | V4 | **ÉLEVÉ** | ⚠️ À arbitrer (acceptation ou réduction) |
 
 ### 5.2 Stratégie de traitement
 
@@ -608,6 +1137,125 @@ SR4 (accès physique bus TPM SPI/I2C)
 
 ---
 
+#### R9 : Compromission de la clé de signature éditeur (ÉLEVÉ → MOYEN)
+
+**Stratégie** : **Réduction** (révocation, séparation des clés) + **Transfert** (organisation des clés côté éditeur, hors périmètre)
+
+**Mesures** :
+1. ✅ **Création des bundles hors ligne** (REQ-BUN-1)
+2. ✅ **Clé asymétrique de signature et KEK symétrique distinctes** : sans la KEK, produire un bundle exige de réutiliser une clé de session déjà connue de l'attaquant ; cette séparation n'a de valeur que si le TPM n'est pas un oracle (R16)
+3. 🔲 **Stockage de la clé de signature en HSM** et cérémonie de clés ; KEK stockée séparément
+4. 🔲 **Mécanisme de révocation et de rotation** de la clé de vérification (NV index, autorité de secours)
+5. 🔲 **Double signature ou quorum** pour les releases (signatures hybrides prévues dans `05`)
+6. 🔲 **Journal d'audit des signatures**
+
+**Risque résiduel après traitement** : **MOYEN** (la compromission reste possible, sa durée est bornée par la révocation)
+
+---
+
+#### R10 : Compromission de la chaîne d'approvisionnement logicielle (ÉLEVÉ → MOYEN)
+
+**Stratégie** : **Réduction**
+
+**Mesures** :
+1. ✅ **Versions épinglées, `Cargo.lock` versionné** (REQ-CRY-2) ; primitives issues des bibliothèques des projets de l'ANSSI (REQ-CRY-1)
+2. 🔲 **`cargo audit`, `cargo vet`, `cargo deny` en CI**
+3. 🔲 **Vendoring** et revue des mises à jour des crates critiques (`aes-gcm-siv`, `hkdf`, `tss-esapi`)
+4. 🔲 **Build reproductible, SBOM, signature des artefacts** (niveaux SLSA)
+5. 🔲 **Chaîne de boot vérifiant `updated`** (voir R3)
+
+**Risque résiduel après traitement** : **MOYEN**
+
+---
+
+#### R11 : Freeze et maintien sur version vulnérable (ÉLEVÉ → MOYEN)
+
+**Stratégie** : **Réduction**
+
+**Mesures** :
+1. ✅ **Anti-rollback** (compteur NV) et `min_firmware_version` : traitent le downgrade
+2. 🔲 **Mécanisme de fraîcheur** : métadonnées signées avec horodatage ou expiration, vérifiées par le device (approche de TUF)
+3. 🔲 **Alerte côté device et côté serveur** quand une version installée est trop ancienne ou qu'aucune vérification n'a abouti depuis N jours
+4. 🔲 **Environnement U-Boot signé ou mesuré**, et vérification du slot booté contre le compteur (SO7)
+5. 🔲 **Un bundle = un jeu cohérent d'images** (question ouverte 3 de `02`)
+
+**Risque résiduel après traitement** : **MOYEN** (un attaquant réseau peut toujours bloquer, mais le blocage devient visible)
+
+---
+
+#### R12 : Déni de service et brick (ÉLEVÉ → FAIBLE)
+
+**Stratégie** : **Réduction**
+
+**Mesures** :
+1. ✅ **Limites de ressources du jail** (cgroups) et **mémoire bornée** (REQ-BUN-5)
+2. ✅ **Rate limiting et backoff** sur les tentatives (A11)
+3. 🔲 **A/B intégré à la machine à états** et protocole de commit atomique défini de bout en bout (SO8)
+4. 🔲 **Health-check et watchdog** au premier boot, rollback automatique
+5. 🔲 **Bornes numériques** sur `chunk_size`, `chunk_count`, taille du manifeste ; fuzzing du header (SO9)
+6. 🔲 **Spécification du canal de contrôle** `updatectl` ↔ `updated` (SO11)
+7. 🔲 **Gestion RAII des sessions TPM** et test de saturation (SO10)
+
+**Risque résiduel après traitement** : **FAIBLE**
+
+---
+
+#### R13 : Exfiltration ou falsification via le payload (MOYEN → FAIBLE)
+
+**Stratégie** : **Réduction**
+
+**Mesures** :
+1. ✅ **Réseau toujours isolé** (`CLONE_NEWNET`), policy machine, bind mounts en lecture seule
+2. 🔲 **Quota et format de la sortie contrôlée** ; fin des écritures du payload hors des zones autorisées
+3. 🔲 **Journal d'événements critiques séparé** de la sortie du payload, avec extension de PCR
+4. 🔲 **Vérification post-écriture du slot** contre les hash des artefacts du manifeste
+
+**Risque résiduel après traitement** : **FAIBLE**
+
+---
+
+#### R14 : Reset du TPM et rejeu de PCR (MOYEN → FAIBLE)
+
+**Stratégie** : **Réduction**
+
+**Mesures** :
+1. ✅ **`PolicyAuthorize`** : permet de faire évoluer la policy sans re-provisionner la KEK, mais sa signature n'est pas un secret et ne protège pas d'un rejeu
+2. 🔲 **`PolicyPCR` obligatoire** (et non optionnelle) dans la policy de la KEK
+3. 🔲 **Ligne de reset du TPM reliée au reset du SoC** (conception matérielle)
+4. 🔲 **Lier la policy au header** (question 13 de `03`)
+
+**Risque résiduel après traitement** : **FAIBLE**
+
+---
+
+#### R15 : Injection de fautes sur le SoC (FAIBLE)
+
+**Stratégie** : **Acceptation** (hypothèses matérielles, 1.6)
+
+**Mesures** :
+1. 🔲 **Faire porter la décision par le TPM** : tant que la vérification du header est séquencée par le logiciel (question 13 de `03`), un saut de test dans `updated` permet de présenter un header non authentique
+2. 🔲 **Choix d'un SoC et d'un TPM** avec contre-mesures documentées
+3. 🔲 **Tests de glitching** avant certification (nice-to-have)
+
+**Risque résiduel après traitement** : **FAIBLE**
+
+---
+
+#### R16 : Divulgation par le propriétaire du device, TPM comme oracle (ÉLEVÉ, arbitrage)
+
+**Stratégie** : **À décider** entre deux options.
+
+- **Option A, acceptation** : la confidentialité n'est garantie que contre les attaquants A1 à A4, pas contre celui qui contrôle un device. Ce choix est à consigner dans `01-threat-model.md` (hors périmètre). Risque résiduel : **ÉLEVÉ**, assumé.
+- **Option B, réduction** :
+  1. 🔲 **Lier la policy de la KEK au header ou au bundle** (question 13 de `03`) pour supprimer l'oracle
+  2. 🔲 **KEK par device ou par famille** (question 6 de `00`) pour limiter l'effet d'un device ouvert
+  3. 🔲 **Restriction d'accès à `/dev/tpmrm0`** en défense en profondeur (root la contourne)
+  4. ✅ **Clé de session unique par bundle** et clés par chunk (déjà spécifiés) : l'extraction depuis la RAM n'expose qu'un bundle
+
+  Risque résiduel : **MOYEN** (un device ouvre encore les bundles qu'il installe)
+
+---
+
 ### 5.3 Plan d'amélioration continue
 
 #### Priorité 1 : Critique (avant implémentation)
@@ -619,6 +1267,11 @@ SR4 (accès physique bus TPM SPI/I2C)
 | Spécifier les mesures PCR (bootloader, kernel, rootfs) | Architecte | T+2 semaines | 🔲 À faire |
 | Décider de CLONE_NEWUSER et CLONE_NEWPID | Architecte | T+1 semaine | 🔲 À faire |
 | Créer `rust-toolchain.toml` avec version stable | Dev lead | T+1 semaine | ✅ Fait (canal `stable`) |
+| Lier la policy de la KEK au header (question 13 de `03`) et trancher KEK par device ou par flotte | Architecte | T+2 semaines | 🔲 À faire |
+| Spécifier la révocation et la rotation de la clé de vérification et de la KEK | Architecte | T+2 semaines | 🔲 À faire |
+| Spécifier la fraîcheur des mises à jour (horodatage ou expiration signés) | Architecte | T+2 semaines | 🔲 À faire |
+| Intégrer l'A/B et le protocole de commit atomique à `04-update-flow.md` | Architecte | T+2 semaines | 🔲 À faire |
+| Rendre `PolicyPCR` obligatoire et relier le reset du TPM au reset du SoC | Architecte, matériel | T+2 semaines | 🔲 À faire |
 
 #### Priorité 2 : Haute (pendant implémentation)
 
@@ -629,6 +1282,11 @@ SR4 (accès physique bus TPM SPI/I2C)
 | Implémenter cgroups v2 pour le jail | Dev | T+4 semaines | 🔲 À faire |
 | Fuzzing du parser manifeste | QA | T+6 semaines | 🔲 À faire |
 | Fuzzing du parser chunks | QA | T+6 semaines | 🔲 À faire |
+| Fuzzing du parser de header (bornes numériques) | QA | T+6 semaines | 🔲 À faire |
+| Activer `cargo audit`, `cargo vet`, `cargo deny` en CI ; vendoring | Dev | T+4 semaines | 🔲 À faire |
+| Spécifier le protocole `updatectl` ↔ `updated` (`SO_PEERCRED`, commandes, pas de chemin client) | Dev | T+4 semaines | 🔲 À faire |
+| Définir quotas et format de la sortie du payload, journal critique séparé | Dev | T+4 semaines | 🔲 À faire |
+| Signer ou mesurer l'environnement U-Boot et vérifier le slot booté | Dev | T+6 semaines | 🔲 À faire |
 
 #### Priorité 3 : Moyenne (après MVP)
 
@@ -638,6 +1296,9 @@ SR4 (accès physique bus TPM SPI/I2C)
 | Implémenter la rotation des clés (KEK, signature) | Dev | T+12 semaines | 🔲 À faire |
 | Audit formel du code critique (Prusti, Kani) | Dev | T+24 semaines | 🔲 À faire |
 | Certification Common Criteria ou ANSSI CSPN | Dev lead | T+52 semaines | 🔲 À faire |
+| Build reproductible, SBOM, signature des artefacts | Dev lead | T+12 semaines | 🔲 À faire |
+| Clé de signature en HSM, cérémonie de clés, double signature | Éditeur | T+12 semaines | 🔲 À faire |
+| Tests de glitching et de saturation du TPM sur matériel réel | QA | T+24 semaines | 🔲 À faire |
 
 ### 5.4 Cadre de suivi des risques
 
@@ -650,6 +1311,11 @@ SR4 (accès physique bus TPM SPI/I2C)
 | Temps de vérification du header | Quotidienne | Variance > 2σ | Investigation (timing attack ?) |
 | Nombre de devices avec TPM réinitialisé | Mensuelle | > 1% de la flotte | Investigation (attaque physique coordonnée ?) |
 | Nombre de vulnérabilités découvertes dans le code | Mensuelle | CVE critique | Patch urgent |
+| Âge de la version installée sur chaque device | Hebdomadaire | > N jours sans mise à jour ni contact serveur | Investigation (freeze, SS8) |
+| Volume et fréquence de la sortie du payload | Par exécution | Quota dépassé | Interruption du jail, investigation (SO12) |
+| Mises à jour interrompues (coupure, échec de health-check) | Quotidienne | > 1% de la flotte | Revue du protocole de commit (SO8) |
+| Écarts de PCR au boot ou resets du TPM détectés | Quotidienne | Tout événement | Investigation (SO6) |
+| Alertes `cargo audit` et changements de dépendances | À chaque build | Advisory critique ou dépendance non revue | Blocage de la release (SS7) |
 
 #### Revue de risque
 
@@ -704,6 +1370,10 @@ SR4 (accès physique bus TPM SPI/I2C)
 [[4]] Trusted Computing Group, "TPM 2.0 Library Specification", version 1.59, 2019 (la plateforme cible implémente la révision 1.38).
 
 [[5]] MITRE, "ATT&CK Framework", 2024. Disponible sur : https://attack.mitre.org/
+
+[[6]] The Update Framework (TUF), "Specification" (attaques par rollback, freeze et mix-and-match). Disponible sur : https://theupdateframework.github.io/specification/latest/
+
+[[7]] OpenSSF, "SLSA — Supply-chain Levels for Software Artifacts". Disponible sur : https://slsa.dev/
 
 ---
 
