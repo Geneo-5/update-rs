@@ -15,6 +15,10 @@ document a un **statut** en tête de fichier (`Brouillon` → `En revue` → `St
 | [spec/05-crypto.md](spec/05-crypto.md) | Primitives et bibliothèques (AES-GCM, AES Keywrap, ECDSA P-256 via TPM, Ed25519/ML-DSA) | Brouillon |
 | [spec/06-jail.md](spec/06-jail.md) | Environnement d'exécution sandboxé du payload (tmpfs, namespaces, fsset, seccomp) | Brouillon |
 | [spec/07-security-analysis.md](spec/07-security-analysis.md) | Analyse de sécurité approfondie : scénarios d'attaque, points à clarifier, guide Rust ANSSI | Brouillon |
+| [state-of-the-art.md](state-of-the-art.md) | État de l'art des systèmes de mise à jour sécurisés (recherche, normes, implémentations, limites) | Brouillon |
+| [tpm-revisions-comparison.md](tpm-revisions-comparison.md) | Comparaison des révisions de la bibliothèque TPM 2.0 (1.59 → 1.84+, composants certifiés, impact projet) | Brouillon |
+| [key-management.md](key-management.md) | Cycle de vie complet des clés cryptographiques (`K-SIGN-REL`, `K-KEK-DEVICE`, `K-TPM-EK/AK`, Secure Boot, provisioning, rotation, révocation, destruction) — conforme ANSSI RGS B2 et NIST SP 800-57 | Brouillon |
+| [prerequis-integration.md](prerequis-integration.md) | Prérequis d'intégration et éléments hors scope `update-rs` (Secure Boot, provisioning TPM, MTD, supply chain, configuration Linux, CUP) — matrice de responsabilités (4 acteurs) | Brouillon |
 | [adr/](adr/) | Décisions d'architecture (une par fichier) | — |
 | [EBIOS-RM-analysis.md](EBIOS-RM-analysis.md) | Analyse de risque EBIOS Risk Manager (ateliers 1 à 5, plan de traitement) | Brouillon |
 | [CHANGES-security-review.md](CHANGES-security-review.md) | Journal des modifications issues de la revue de sécurité du 2026-10-06 | — |

@@ -11,7 +11,7 @@ Un TPM 2.0 courant ne fait ni chiffrement de masse à bon débit, ni X25519, ni 
 protège les clés et conditionne leur usage à l'état de la plateforme ; le chiffrement du
 payload se fait en logiciel avec une clé de session dérivée et encapsulée par le TPM.
 
-**Cible** : TPM 2.0 en révision 1.38 de la Library Specification TCG. Les commandes et algorithmes décrits ci-dessous DOIVENT être validés par rapport à cette révision et aux capacités réelles du composant (`TPM2_GetCapability`).
+**Cible** : TPM 2.0 en révision 1.59 de la Library Specification TCG. Les commandes et algorithmes décrits ci-dessous DOIVENT être validés par rapport à cette révision et aux capacités réelles du composant (`TPM2_GetCapability`).
 
 ## Architecture des clés et policies (profil retenu)
 
@@ -83,7 +83,7 @@ La clé de session (master key de 256 bits, dont les clés de chunk sont dériv�
 
 **Pas de fallback logiciel** : contrairement aux versions antérieures de cette spécification, aucun fallback logiciel n'est prévu. La KEK ne quitte jamais le TPM, et le TPM effectue le déchiffrement AES Keywrap en interne.
 
-> **À vérifier avant implémentation** : la spécification TPM 2.0 (révision 1.38 comprise) ne définit ni commande `TPM2_Unwrap`, ni AES Key Wrap (RFC 3394/5649). `TPM2_Duplicate` sert à dupliquer un objet TPM vers un nouveau parent (enveloppe interne propre au TPM) et ne déballe pas une clé arbitraire fournie par le logiciel ; le chiffrement symétrique générique passe par `TPM2_EncryptDecrypt2` (modes ECB/CBC/CFB/CTR/OFB selon le composant, sans GCM ni key wrap). REQ-TPM-6 et REQ-THR-4 supposent donc une capacité à confirmer sur le TPM cible (question ouverte 5) ; le mécanisme x3 ci-dessous est l'alternative à étudier en priorité.
+> **À vérifier avant implémentation** : la spécification TPM 2.0 (révision 1.59) ne définit ni commande `TPM2_Unwrap`, ni AES Key Wrap (RFC 3394/5649). `TPM2_Duplicate` sert à dupliquer un objet TPM vers un nouveau parent (enveloppe interne propre au TPM) et ne déballe pas une clé arbitraire fournie par le logiciel ; le chiffrement symétrique générique passe par `TPM2_EncryptDecrypt2` (modes ECB/CBC/CFB/CTR/OFB selon le composant, sans GCM ni key wrap). REQ-TPM-6 et REQ-THR-4 supposent donc une capacité à confirmer sur le TPM cible (question ouverte 5) ; le mécanisme x3 ci-dessous est l'alternative à étudier en priorité.
 
 ### Mécanisme alternatif x3 : policies TPM de déchiffrement restreintes
 

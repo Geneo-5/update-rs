@@ -13,7 +13,7 @@ Système de mise à jour d'une plateforme embarquée de type SolidRun Clearfog, 
 - **REQ-GEN-3** — L'archive de mise à jour est créée offline et DOIT être lisible en streaming
   lors de la récupération sur le device (voir [02-bundle-format.md](02-bundle-format.md)).
 - **REQ-GEN-4** — Le projet DOIT se cross-compiler pour la cible principale, la SolidRun
-  Clearfog Pro (ARMv7, `armv7-unknown-linux-gnueabihf`), équipée d'un TPM 2.0 en révision 1.38
+  Clearfog Pro (ARMv7, `armv7-unknown-linux-gnueabihf`), équipée d'un TPM 2.0 en révision 1.59
   de la spécification TCG.
 - **REQ-GEN-5** — Les algorithmes cryptographiques DOIVENT s'appuyer sur les mêmes
   bibliothèques que les projets GitHub de l'ANSSI (voir [05-crypto.md](05-crypto.md)).
@@ -49,7 +49,7 @@ Système de mise à jour d'une plateforme embarquée de type SolidRun Clearfog, 
 ## Questions ouvertes
 
 1. Quel bootloader et quelle chaîne de boot (U-Boot, mesures dans le TPM, secure boot SoC) ?
-2. Quel TPM (modèle exact, révision 1.38 de la spécification), quel bus (SPI/I2C) et quelle distribution embarquée (Buildroot, Yocto, autre) ?
+2. Quel TPM (modèle exact, révision 1.59 de la spécification), quel bus (SPI/I2C) et quelle distribution embarquée (Buildroot, Yocto, autre) ?
 3. Mise à jour de quoi : rootfs seul, noyau, bootloader, firmware du TPM ?
 4. Taille typique des bundles et débit/connectivité réseau visés ?
 5. Les bundles sont-ils par appareil (une KEK par device), par famille (une KEK par famille), ou pour toute la flotte ?

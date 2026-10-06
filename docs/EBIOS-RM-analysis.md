@@ -85,6 +85,7 @@ Le système repose sur les hypothèses de sécurité matérielle suivantes :
 | **JTAG désactivé** | Les interfaces de debug JTAG/SWD sont désactivées ou protégées par fuse/eFuse | 🟠 Moyenne (dépend de la configuration) | Réactivation possible via manipulation hardware (glitching, fault injection) |
 | **Accès flash protégé** | La flash (eMMC/MTD) n'est pas accessible en lecture/écriture sans authentification | 🟠 Moyenne (dépend du hardware) | Extraction physique possible (dessoudage, lecteur de carte SD) |
 | **TPM intégré** | Le TPM 2.0 est intégré au SoC ou connecté via bus sécurisé (SPI/I2C) | 🟠 Moyenne (dépend de l'implémentation) | Écoute du bus possible (sonde logique), réinitialisation TPM possible (clear TPM) |
+| **Composant TPM certifié** | Au moins un composant TPM 2.0 à la révision de bibliothèque 1.59 est certifié EAL4+ augmenté par l'ANSSI (Nuvoton NPCT7xx ANSSI-CC-2024/10, Infineon OPTIGA SLB9670 ANSSI-CC-2021/40, ST ST33TPHF2E ANSSI-CC-2018/41, ST ST33GTPMAI2C 1.59, Microchip ATTPM20 FIPS 140-2) | 🔴 Haute (plusieurs offres certifiées disponibles) | Aucun composant certifié CC identifié aux révisions 1.83/1.84 ; la révision 1.59 a obtenu un visa récent (ANSSI-CC-2024/10 pour Nuvoton NPCT7xx) |
 | **Protection contre glitching** | Le SoC dispose de protections contre voltage/clock glitching | 🟡 Faible (dépend du hardware) | Glitching possible sur hardware non protégé, permettant de contourner secure boot ou d'extraire des clés |
 
 **Note** : Ces hypothèses sont considérées comme vraies dans le cadre de cette analyse, mais peuvent être contournées par des attaques hardware avancées (glitching, side-channel, fault injection). La protection contre ces attaques relève de la sécurité physique du hardware et dépasse le périmètre de `update-rs`.
@@ -104,6 +105,9 @@ Le système repose sur les hypothèses de sécurité matérielle suivantes :
 | **TPM utilisable comme oracle** | La policy de la KEK autorise un digest de policy signé, pas un header donné (`03-tpm.md`, question 13) | Un détenteur de device peut utiliser son TPM pour déballer la clé de session de bundles de la flotte (SS13) |
 | **Canal de contrôle local non spécifié** | Le protocole `updatectl` ↔ `updated` (authentification, droits, entrées acceptées) n'est pas décrit | SO11 |
 | **Protocole de commit non défini** | L'ordre écriture du slot / vérification / incrément du compteur NV (REQ-TPM-3) n'est pas spécifié de bout en bout | SO8 |
+| **Pas de politique de gestion des clés** | Le cycle de vie complet des clés cryptographiques (`K-SIGN-REL`, `K-VERIFY-REL`, `K-KEK-DEVICE`, `K-TPM-EK`, `K-TPM-AK`, `K-BOOT-*`, `K-RECOVERY-*`, `K-DEV-*`) n'est pas documenté : génération, enrôlement, provisioning, rotation, révocation, destruction ([Q-15](#q-15)) | SS6, SS13, SO17 à SO20 |
+| **Pas de procédure de provisioning TPM** | Génération/injection de la KEK, création des policies, installation de la clé publique de vérification, configuration des NV indexes, initialisation du compteur anti-rollback, sélection des PCR, procédure de remplacement/RMA ne sont pas spécifiées ([Q-16](#q-16)) | SO14, SO16a, SO18, SO21 |
+| **Secure Boot de la plateforme non spécifié** | La chaîne ROM/SoC → bootloader → kernel → rootfs → `updated` est revendiquée (REQ-THR-6) mais l'intégration effective (verrouillage des variables de boot, correspondance des PCR, désactivation des interfaces de récupération) n'est pas documentée ([Q-17](#q-17)) | SS3, SS11, SO1 à SO3 |
 
 ---
 
@@ -1943,7 +1947,7 @@ SR9 (capture d'un device physique)
 
 [[3]] ANSSI, "Guide de développement sécurisé en Rust", 2024. Disponible sur : https://anssi-fr.github.io/rust-guide/
 
-[[4]] Trusted Computing Group, "TPM 2.0 Library Specification", version 1.59, 2019 (la plateforme cible implémente la révision 1.38).
+[[4]] Trusted Computing Group, "TPM 2.0 Library Specification", version 1.59, 2019.
 
 [[5]] MITRE, "ATT&CK Framework", 2024. Disponible sur : https://attack.mitre.org/
 

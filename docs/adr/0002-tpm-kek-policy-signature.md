@@ -60,7 +60,7 @@ Les options A (clé scellée en RAM) et B (ECDH via TPM) discutées précédemme
 - Décider si la KEK doit être renouvelable en field (pour compromis) ou fixe à vie.
 - Choisir la bibliothèque Rust pour AES Keywrap (`aes-kw` ou implémentation sur `aes`).
 - Valider que `swtpm` supporte les sessions chiffrées ECDH pour les tests.
-- Confirmer sur le TPM cible (révision 1.38) quelle commande réalise le déballage de la clé de session (AES Keywrap natif ou mécanisme x3).
+- Confirmer sur le TPM cible (révision 1.59) quelle commande réalise le déballage de la clé de session (AES Keywrap natif ou mécanisme x3).
 - Spécifier précisément la chaîne de boot pour ancrer le TPM dans une chaîne de confiance vérifiée (secure boot → bootloader → kernel → rootfs → `updated`).
 
 ### Alternative : mécanisme x3

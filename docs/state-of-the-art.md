@@ -121,7 +121,7 @@ Devices** est le cadre de référence pour ancrer la mise à jour dans un module
 en s'appuyant sur un démarrage mesuré et l'attestation [[44]]. L'architecture TPM 2.0
 définit les primitives utilisées ici : NV Index pour le stockage persistant, compteurs
 monotiques, extension de PCR, et verrouillage anti-attaque par dictionnaire [[45]]. La
-révision 1.38 de la bibliothèque TPM est celle visée par le profil de protection ANSSI/TCG
+révision 1.59 de la bibliothèque TPM est celle visée par le profil de protection ANSSI/TCG
 [[67]] et par des composants du marché ; la certification ANSSI-CC-2021/40 relève
 explicitement qu'une double instanciation de TPM « permet une mise à jour sécurisée » [[72]].
 DICE fournit une alternative sans TPM, avec une implémentation de démarrage mesuré
@@ -142,7 +142,7 @@ redémarrer l'hôte et en rejouant des mesures, ce qui défait toute protection 
 les seuls PCR [[15]]. C'est la traduction exacte du scénario SS11/SO6 du projet. De plus,
 la spécification TPM impose un verrouillage anti-dictionnaire [[45]] : un compteur ou une
 clé protégés par `authValue` deviennent un vecteur de déni de service (SO10). Enfin, le
-choix d'une révision ancienne (1.38) expose aux errata et vulnérabilités d'implémentation
+choix de la révision 1.59 expose aux errata et vulnérabilités d'implémentation
 documentées sur la bibliothèque de référence [[67]][[45]].
 
 ### 3.4 Confidentialité du payload
@@ -218,7 +218,7 @@ pour détecter/récupérer les nœuds compromis [[11]]. La NSA étudie l'attesta
 réseau [[61]].
 
 **Limites documentées.** RASUES/SCUBA sont des schémas de recherche, non industrialisés sur
-la cible ARMv7 + TPM 1.38. Le projet ne spécifie **pas encore** d'`TPM2_Quote` : impossible
+la cible ARMv7 + TPM 2.0 rév. 1.59. Le projet ne spécifie **pas encore** d'`TPM2_Quote` : impossible
 de détecter un TPM remplacé ou compromis — écart « pas d'attestation distante »
 `EBIOS-RM-analysis.md` § 1.7.
 
@@ -258,7 +258,7 @@ par arbre/chaînage de [[25]][[65]].
 |---|---|---|---|
 | Authenticité / intégrité | ASSURED, TUF/Uptane, SUIT, RAUC | point d'extrémité logiciel supposé intègre | [[1]][[2]][[3]][[46]][[48]][[49]][[55]][[18]] |
 | Résilience / anti-brick | NIST SP 800-193, Android A/B, PSA | commit non défini de bout en bout ; données hors slot non couvertes | [[40]][[41]][[53]][[54]][[50]][[51]][[52]] |
-| Ancrage matériel | TCG secure update, TPM 2.0, DICE, ROTE/TALUS | SRTM subvertible par reset/rejeu de PCR ; verrouillage DA ; révision 1.38 datée | [[44]][[45]][[14]][[16]][[17]][[15]][[67]][[72]] |
+| Ancrage matériel | TCG secure update, TPM 2.0, DICE, ROTE/TALUS | SRTM subvertible par reset/rejeu de PCR ; verrouillage DA ; révision 1.59 datée | [[44]][[45]][[14]][[16]][[17]][[15]][[67]][[72]] |
 | Confidentialité payload | SUIT encryption, MLA, RAUC/SWUpdate chiffrés | fragile quand la clé est sur l'appareil ; opérateur légitime non couvert | [[47]][[46]][[65]][[66]][[57]][[24]][[26]][[23]] |
 | Anti-rollback / fraîcheur | compteurs monotiques TPM ; expiration TUF | rollback ≠ freeze ; les deux familles rarement combinées | [[52]][[51]][[16]][[17]][[22]][[48]][[49]] |
 | Isolation du payload | Landlock/seccomp/namespaces, Rust ANSSI | les cadres de mise à jour n'isolent pas l'exécution ; dépend du noyau ARMv7 | [[63]][[64]][[21]][[35]][[75]][[30]] |
@@ -279,7 +279,7 @@ les cadres matériels (TCG secure update, TPM 2.0, DICE, PSA) résolvent l'ancra
 l'oracle de déchiffrement [[44]][[45]][[14]][[50]][[15]] ; les guides de résilience
 (NIST SP 800-193) prescrivent protéger/détecter/récupérer sans imposer de protocole
 applicatif [[40]]. **Aucun travail existant ne combine, sur une même plateforme contrainte
-(ARMv7 + TPM 2.0 rév. 1.38), (i) un ancrage matériel de l'authenticité *et* de la
+(ARMv7 + TPM 2.0 rév. 1.59), (i) un ancrage matériel de l'authenticité *et* de la
 confidentialité, (ii) un format streamable à mémoire bornée résistant au rejeu de morceaux,
 (iii) une isolation du *parsing* et de l'*exécution* du payload, et (iv) une politique
 matérielle liée au contenu vérifié.** C'est l'espace que cherche à couvrir `update-rs`.
@@ -358,8 +358,8 @@ ouverts.
 Ces limites ne sont pas des défauts masqués : elles découlent de l'état de l'art et sont
 portées aux écarts de `EBIOS-RM-analysis.md` § 1.7 et aux questions ouvertes des `spec/0X`.
 
-1. **Révision TPM 1.38.** Datée au regard des révisions et errata ultérieurs [[45]][[67]] ;
-   justifiée par la disponibilité matérielle de la cible, à consolider par ADR.
+1. **Révision TPM 1.59.** Justifiée par la disponibilité matérielle de la cible ; à consolider
+   par ADR que les errata ultérieurs (1.72, 1.83+) ne modifient pas la sémantique exploitée.
 2. **Liaison policy↔header et séquencement logiciel.** Tant que la vérification du header
    est séquencée par le logiciel (question 13 de `spec/03`), un saut de test par injection
    de fautes peut présenter un header non authentique (SS12) ; la contre-mesure de fond est
@@ -450,7 +450,7 @@ portées aux écarts de `EBIOS-RM-analysis.md` § 1.7 et aux questions ouvertes 
 - [[64]] Linux man-pages, *seccomp_unotify(2)*. https://man7.org/linux/man-pages/man2/seccomp_unotify.2.html
 - [[65]] ANSSI-FR, *MLA – Multi Layer Archive* (archive Rust streamable, chiffrement, signatures, PQC). https://github.com/ANSSI-FR/MLA
 - [[66]] C. Mougey, J. Barallon, *MLA et l'implémentation d'une hybridation cryptographique*, SSTIC 2026. https://www.sstic.org/2026/presentation/mla_et_l_implementation_d_une_hybridation_cryptographique/
-- [[67]] ANSSI/TCG, *Protection Profile PC Client Specific TPM* (réf. TPM Library 2.0 rév. 1.38). https://www.commoncriteriaportal.org/nfs/ccpfiles/files/ppfiles/anssi-profil-pp-2021_02en.pdf
+- [[67]] ANSSI/TCG, *Protection Profile PC Client Specific TPM* (réf. TPM Library 2.0 rév. 1.59). https://www.commoncriteriaportal.org/nfs/ccpfiles/files/ppfiles/anssi-profil-pp-2021_02en.pdf
 - [[68]] Texas Instruments, *SLAA682, Secure In-Field Firmware Updates for MSP MCUs*. https://www.ti.com/lit/slaa682
 - [[69]] Open Compute Project / CSIS, *Secure Firmware Development Best Practices*. https://www.opencompute.org/documents/csis-firmware-security-best-practices-position-paper-version-1-0-pdf
 - [[70]] MITRE, *CWE-409: Improper Handling of Highly Compressed Data* (décompression bomb). https://cwe.mitre.org/data/definitions/409.html

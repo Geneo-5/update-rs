@@ -1,11 +1,10 @@
-# Comparaison des révisions de la bibliothèque TPM 2.0 (1.38 → 1.84+)
+# Comparaison des révisions de la bibliothèque TPM 2.0 (1.59 → 1.84+)
 
 Statut : **Brouillon**
-Objet : recenser les révisions de la bibliothèque TPM 2.0 postérieures à la 1.38,
+Objet : recenser les révisions de la bibliothèque TPM 2.0 postérieures à la 1.59,
 identifier les composants commercialement disponibles et leur niveau de certification
 Common Criteria, et évaluer l'impact d'un éventuel changement de révision sur les
-primitives mobilisées par le projet.
-Positionnement : ce document **complète** [`spec/03-tpm.md`](./spec/03-tpm.md) et
+primitives mobilisées par le projet. Positionnement : ce document **complète** [`spec/03-tpm.md`](./spec/03-tpm.md) et
 [`EBIOS-RM-analysis.md`](./EBIOS-RM-analysis.md) § 1.6 (hypothèses matérielles) et § 1.7
 (écarts). Il ne définit aucune exigence `REQ-*` et ne produit aucune cotation de risque :
 il alimente un futur ADR (`adr/`, modèle `adr/0000-template.md`).
@@ -23,14 +22,14 @@ il alimente un futur ADR (`adr/`, modèle `adr/0000-template.md`).
 
 ### 1.1 Le choix actuel du projet
 
-Le README du dépôt et l'analyse de risque déclarent une cible **TPM 2.0, révision 1.38**
-de la spécification TCG. L'analyse cite par ailleurs la bibliothèque en révision **1.59**
-(2019) tout en notant que « la plateforme cible implémente la révision 1.38 »
+Le README du dépôt et l'analyse de risque déclarent une cible **TPM 2.0, révision 1.59**
+de la spécification TCG. L'analyse cite par ailleurs la bibliothèque en révision
+**1.38** (2016) tout en notant que « la plateforme cible implémente la révision 1.59 »
 (`EBIOS-RM-analysis.md`, réf. `[[4]]`).
 
 **Constat documentaire n° 1.** Il existe une divergence interne entre la révision
-*visée* (1.38, README + hypothèse « TPM intégré ») et la révision *citée comme référence
-normative* (1.59). Cette divergence n'est pas un problème technique en soi — les deux
+*visée* (1.59, README + hypothèse « TPM intégré ») et la révision *citée comme référence
+normative* (1.38). Cette divergence n'est pas un problème technique en soi — les deux
 révisions coexistent sur le marché — mais elle doit être tranchée et documentée, car la
 révision détermine :
 
@@ -46,9 +45,8 @@ Trois motifs, tous issus de l'analyse existante :
 1. **Oracle de déchiffrement** (écart « TPM utilisable comme oracle », question 13 de
    `spec/03`, SS13/SO16, R16). La mitigation proposée consiste à *lier la policy au
    contenu vérifié*, voire à *faire porter la décision par le TPM* (R15). Certaines
-   commandes de politique et d'attestation sont absentes ou mal précisées en 1.38 et
-   clarifiées ensuite ; le choix de révision conditionne donc la formulation de la
-   mitigation.
+   commandes de politique et d'attestation sont précisées différemment entre 1.38 et 1.59 ;
+   le choix de révision conditionne donc la formulation de la mitigation.
 2. **Réinitialisation et rejeu de mesures** (SS11/SO6, R14 ; SO5, R5). La robustesse de
    `PolicyPCR` et le comportement du module après `TPM2_Clear` sont des points précisés
    par les révisions ultérieures et par les errata.
@@ -68,9 +66,9 @@ de *changelog* annoté ligne à ligne.
 
 | Révision | Publication | Nature du document | Pertinence pour le projet |
 |---|---|---|---|
-| **1.38** | 29 sept. 2016 | Première consolidation « Level 0 » largement diffusée ; référencée par le profil de protection ANSSI/TCG [3] | **Révision déclarée par le projet** |
+| **1.38** | 29 sept. 2016 | Première consolidation « Level 0 » largement diffusée ; référencée par le profil de protection ANSSI/TCG [3] | Révision historique, citée comme référence documentaire |
 | 1.46 | ~2017–2018 | Révision intermédiaire, errata associés [2] | Non pertinente en soi |
-| **1.59** | 2019 | Révision de référence citée par l'analyse `[[4]]` ; supportée par un composant certifié ANSSI récent [4] | **Révision alternative candidate** |
+| **1.59** | 2019 | **Révision de base cible du projet** ; supportée par un composant certifié ANSSI récent [4] | **Révision visée par le projet** |
 | 1.72 | ~2021 | Révision intermédiaire | Faible |
 | **1.83 / 1.84** | ~2022–2024 | Dernières révisions connues du TCG à la date de rédaction ; errata conjoints [2] | À surveiller ; aucun composant CC identifié à ce niveau (§ 4.3) |
 
@@ -135,27 +133,27 @@ pas un motif de migration, mais leur **absence** en 1.38 peut contraindre une mi
 
 ### 3.3 Écarts identifiés
 
-**Aucun écart bloquant** n'a été identifié entre la 1.38 et les révisions supérieures
+**Aucun écart bloquant** n'a été identifié entre la 1.59 et les révisions supérieures
 pour le sous-ensemble de primitives utilisé. Les primitives du projet (signature,
 import/déballage, NV, compteur, PCR, `PolicyAuthorize`, `PolicyPCR`, sessions chiffrées)
-existent toutes en 1.38. Les révisions ultérieures **précisent** sans **supprimer**.
+existent toutes en 1.38 et 1.59. Les révisions ultérieures **précisent** sans **supprimer**.
 
-**Risques résiduels du maintien en 1.38**, à consigner dans l'ADR :
+**Risques résiduels du maintien en 1.59**, à consigner dans l'ADR :
 
-1. **Errata non appliqués.** La 1.38 fait l'objet d'un document d'errata [2]. Un
-   composant peut être conforme à la 1.38 *sans* les clarifications ultérieures, ce qui
+1. **Errata non appliqués.** La 1.59 fait l'objet d'un document d'errata [2]. Un
+   composant peut être conforme à la 1.59 *sans* les clarifications ultérieures (1.72+), ce qui
    introduit des divergences d'interprétation entre fabricants sur les points (a) du
    § 3.2 — précisément ceux où le projet a des questions ouvertes.
 2. **Vulnérabilités d'implémentation de référence.** Des vulnérabilités de corruption
    mémoire ont été documentées dans l'implémentation de référence de la bibliothèque
    (CERT/CC, avis VU#782720, 2023) [10]. Cet avis concerne le *code de référence*, pas une
    révision donnée ; il impose de vérifier, composant par composant, l'application des
-   correctifs — y compris sur un composant 1.38.
-3. **Divergence documentaire interne.** Cf. § 1.1 : citer la 1.59 comme référence
-   normative tout en ciblant la 1.38 créera une question en évaluation.
+   correctifs — y compris sur un composant 1.59.
+3. **Divergence documentaire interne.** Cf. § 1.1 : citer la 1.38 comme référence
+   normative tout en ciblant la 1.59 créera une question en évaluation.
 4. **Obsolescence de la révision au moment de l'évaluation.** Le plan d'action vise une
    certification à T+52 semaines. Entre-temps, le profil de protection ANSSI/TCG peut être
-   révisé pour viser une révision supérieure ; un composant 1.38 pourrait alors être
+   révisé pour viser une révision supérieure ; un composant 1.59 pourrait alors être
    évalué contre un profil qui ne le couvre plus.
 
 ---
@@ -182,19 +180,20 @@ existent toutes en 1.38. Les révisions ultérieures **précisent** sans **suppr
 ### 4.2 Observations
 
 **(1) La 1.38 reste bien couverte par l'offre certifiée.** Deux composants disposant d'un
-visa ANSSI sont en 1.38 [5][9]. Le choix actuel du projet est donc **compatible avec un
-objectif de certification**, ce qui n'était pas évident a priori.
+visa ANSSI sont en 1.38 [5][9]. Cette information historique est conservée pour les
+plateformes déjà déployées à cette révision.
 
-**(2) La 1.59 apparaît dans les évaluations les plus récentes.** Le visa ANSSI-CC-2024/10
-porte sur une configuration 1.59 [4]. Un composant à ce bénéfice d'une évaluation
-intégrant les clarifications du § 3.2(a) — donc d'une assise normative plus solide pour
-les questions ouvertes 13 (`spec/03`) et les scénarios SO5/SO6.
+**(2) Le composant cible retenu (NPCT7xx) est certifié à la révision 1.59.** Le visa
+ANSSI-CC-2024/10 porte sur une configuration 1.59 [4]. Un composant à ce bénéfice
+intègre les clarifications du § 3.2(a) — donc une assise normative plus solide pour les
+questions ouvertes 13 (`spec/03`) et les scénarios SO5/SO6.
 
 **(3) Le profil de protection référence la 1.38.** Le profil ANSSI/TCG pour TPM de client
 PC [3] mentionne explicitement la bibliothèque 2.0 Level 0 révision 1.38. Un composant
 1.59 évalué contre ce profil doit démontrer sa conformité, ce que la cible [4] semble
 traiter. **Implication pratique** : en l'état, une évaluation menée contre le profil
-actuel est *plus directe* pour un composant 1.38.
+actuel est *plus directe* pour un composant 1.38, mais un composant 1.59 certifié peut
+démontrer sa compatibilité par rapport au profil.
 
 **(4) Aucun composant certifié CC identifié en 1.83/1.84.** À la date de rédaction, les
 révisions 1.83/1.84 ne sont pas associées à un visa ANSSI ou à un certificat CC public.
@@ -202,10 +201,10 @@ Migrer à ce niveau reviendrait à perdre le bénéfice d'une évaluation exista
 de preuve n'est pas preuve d'absence** : un dossier en instruction n'apparaît pas encore
 dans les référentiels publics.
 
-**(5) Le niveau AVA_VAN.5 est l'information la plus utile au projet.** Il correspond à
-une résistance évaluée face à un attaquant doté d'un potentiel élevé, ce qui couvre une
-partie des sources de risque SR3/SR4 de l'analyse (accès physique flash, accès au bus).
-En revanche, il ne couvre pas les attaques matérielles avancées (R15, § 1.6) : la
+**(5) Le niveau AVA_VAN.5 est l'information la plus utile au projet.** Il correspond à une
+résistance évaluée face à un attaquant doté d'un potentiel élevé, ce qui couvre une partie
+des sources de risque SR3/SR4 de l'analyse (accès physique flash, accès au bus). En
+néanmoins, il ne couvre pas les attaques matérielles avancées (R15, § 1.6) : la
 certification du module ne dispense pas de l'hypothèse matérielle.
 
 **(6) Le rapport ANSSI-CC-2021/40 documente un précédent directement utile.** Il relève
@@ -224,9 +223,10 @@ point relève d'un ADR distinct** (choix du composant), pas de la comparaison de
 
 | Option | Avantages | Inconvénients | Verdict provisoire |
 |---|---|---|---|
-| **Maintenir 1.38** | Conformité directe au profil ANSSI/TCG [3] ; composants certifiés disponibles [5][9] ; zéro travail de re-qualification | Errata à appliquer manuellement [2] ; ambiguïtés normatives non levées sur les points (a) § 3.2 ; divergence documentaire à corriger (§ 1.1) | **Retenu à court terme** |
-| **Basculer en 1.59** | Clarifications intégrées ; visa récent [4] ; assise plus solide pour la mitigation de l'oracle (R16) et de SO5/SO6 | Perte de la conformité directe au profil actuel ; dépend d'un composant précis ; re-qualification | **Candidate à moyen terme**, conditionnée au choix du composant |
+| **Maintenir 1.59** | Visa récent [4] ; clarifications intégrées ; assise plus solide pour la mitigation de l'oracle (R16) et de SO5/SO6 | Divergence documentaire avec le profil ANSSI/TCG [3] ; compatibilité à démonmer contre le profil actuel | **Retenu à court terme** |
+| **Revenir à 1.38** | Conformité directe au profil ANSSI/TCG [3] ; composants certifiés historiques [5][9] ; zéro travail de re-qualification | Errata à appliquer manuellement [2] ; ambiguïtés normatives non levées sur les points (a) § 3.2 ; perte du visa ANSSI-CC-2024/10 | **Historique, pour plateformes existantes** |
 | **Viser 1.83/1.84** | Alignement sur la spécification la plus récente | Aucun composant CC identifié ; risque de perdre tout bénéfice d'évaluation | **Écarté** |
+
 ---
 
 ## 5. Impact sur les décisions du projet
@@ -249,10 +249,11 @@ formulation de la mitigation (ambiguïtés levées), elle ne la *fournit* pas. L
 relève donc de l'ADR de policy, pas de l'ADR de révision.
 
 **(b) La révision ne résout pas l'absence d'attestation distante.** Le manque de
-`TPM2_Quote` (§ 1.7, R5, R14, plan d'action T+12 semaines) n'est pas imputable à la 1.38 :
-l'attestation par signature d'un état de PCR est une commande fondamentale de la bibliothèque
-[1][7]. Le projet peut l' spécifier dès aujourd'hui ; ce qui manque est la conception du
-vérificateur distant et l'enrôlement d'une identité de module, pas la primitive.
+`TPM2_Quote` (§ 1.7, R5, R14, plan d'action T+12 semaines) n'est pas imputable à une
+révision donnée : l'attestation par signature d'un état de PCR est une commande fondamentale
+de la bibliothèque [1][7]. Le projet peut l' spécifier dès aujourd'hui ; ce qui manque est
+la conception du vérificateur distant et l'enrôlement d'une identité de module, pas la
+primitive.
 
 **(c) La révision ne garantit pas la qualité d'implémentation.** Deux composants déclarés à
 une même révision peuvent différer sensiblement : les vulnérabilités de corruption mémoire
@@ -270,16 +271,16 @@ doit être prise en conséquence : sobrement, et subordonnée au choix du compos
 
 | Question du projet | Où elle est posée | Ce que la comparaison de révisions apporte | Décision attendue |
 |---|---|---|---|
-| Lier la policy de la KEK au header / au bundle | `spec/03` question 13 ; § 1.7 « TPM utilisable comme oracle » ; R16, SO16 | Clarifications de la partie 3 [7] et des errata [2] sur la portée d'une autorisation par digest ; **aucun blocage en 1.38 identifié** | ADR de policy (T+2 semaines), indépendant de l'ADR de révision |
+| Lier la policy de la KEK au header / au bundle | `spec/03` question 13 ; § 1.7 « TPM utilisable comme oracle » ; R16, SO16 | Clarifications de la partie 3 [7] et des errata [2] sur la portée d'une autorisation par digest ; **aucun blocage en 1.59 identifié** | ADR de policy (T+2 semaines), indépendant de l'ADR de révision |
 | KEK par device, par famille ou par flotte | `spec/00` question 6 ; R17, R18, R19 ; SO17–SO20 | Rien : la segmentation de clés est un choix d'architecture de provisioning, indépendant de la révision | ADR de provisioning (T+2 à T+4 semaines) |
 | Mécanisme « x3 » : trois branches de policy non décrites | § 1.7 « Mécanisme x3 partiellement spécifié » ; REQ-TPM-X1 à X7 | Les révisions ultérieures précisent les interactions entre commandes de politique et sessions [2][7] ; utile pour rédiger les branches sans ambiguïté | Compléter `spec/03` avant T+2 semaines |
-| `PolicyPCR` obligatoire et lien reset TPM ↔ reset SoC | R14, SO6 ; plan d'action T+2 semaines | La 1.38 permet déjà de rendre la policy conditionnelle aux PCR ; le durcissement est d'abord une décision de spécification, et le lien matériel relève de la conception physique | ADR de policy + exigence matérielle (cf. § 6) |
+| `PolicyPCR` obligatoire et lien reset TPM ↔ reset SoC | R14, SO6 ; plan d'action T+2 semaines | La 1.59 permet déjà de rendre la policy conditionnelle aux PCR ; le durcissement est d'abord une décision de spécification, et le lien matériel relève de la conception physique | ADR de policy + exigence matérielle (cf. § 6) |
 | Épuisement des ressources du module (sessions, séquences) | SO10, R12 ; plan d'action T+24 semaines | Indépendant de la révision TCG : la libération des ressources relève du pilote et du *resource manager* du système (`/dev/tpmrm0`), pas de la bibliothèque | Test de saturation sur matériel réel ; gestion RAII dans `update-tpm` |
-| Rotation et révocation des clés | § 1.7 « Pas de rotation des clés », « Pas de révocation de clé » ; R9, R11 | Indépendant de la révision ; les index NV et les politiques de compteur existent en 1.38 [1] | ADR de cycle de vie des clés (T+4 semaines) |
+| Rotation et révocation des clés | § 1.7 « Pas de rotation des clés », « Pas de révocation de clé » ; R9, R11 | Indépendant de la révision ; les index NV et les politiques de compteur existent en 1.38 et 1.59 [1] | ADR de cycle de vie des clés (T+4 semaines) |
 | Attestation distante | § 1.7 « Pas d'attestation distante » ; R5, R14 | Indépendant de la révision (cf. § 5.1b) | Spécifier `TPM2_Quote` et le vérificateur (T+12 semaines) |
 
 **Lecture transversale.** Sur les sept questions ci-dessus, **aucune** n'est bloquée par la
-révision 1.38. Les révisions ultérieures apportent un confort d'interprétation (§ 5.1a,
+révision 1.59. Les révisions ultérieures apportent un confort d'interprétation (§ 5.1a,
 ligne « Mécanisme x3 »), pas de nouvelles capacités structurantes. C'est un argument fort en
 faveur du maintien à court terme.
 
@@ -311,7 +312,7 @@ L'ADR devrait être court et factuel, et comporter au minimum :
 
 | Jalon du plan d'action | Lien avec la révision | Clause de revue proposée |
 |---|---|---|
-| T+2 semaines (policy, KEK, chaîne de boot, `PolicyPCR`) | Aucun blocage identifié | Vérifier que la rédaction des policies ne repose sur aucune interprétation contestée de la 1.38 ; sinon, documenter l'interprétation retenue dans l'ADR |
+| T+2 semaines (policy, KEK, chaîne de boot, `PolicyPCR`) | Aucun blocage identifié | Vérifier que la rédaction des policies ne repose sur aucune interprétation contestée de la 1.59 ; sinon, documenter l'interprétation retenue dans l'ADR |
 | T+4 semaines (rotation, révocation, bundle de migration) | Aucun | Confirmer que les index NV et compteurs nécessaires existent sur le composant retenu (capacité NV, nombre d'index) |
 | T+12 semaines (`TPM2_Quote`, rotation implémentée) | Aucun (cf. § 5.1b) | Vérifier la présence et la configuration de la racine d'attestation du composant |
 | T+24 semaines (tests de saturation, tests matériels) | Indirect | Les résultats de saturation peuvent révéler des limites propres au composant, indépendamment de la révision : consigner l'écart le cas échéant |
@@ -321,15 +322,14 @@ L'ADR devrait être court et factuel, et comporter au minimum :
 
 `EBIOS-RM-analysis.md` cite en référence `[[4]]` la bibliothèque TPM 2.0 en **révision 1.59**
 (2019), tout en précisant entre parenthèses que « la plateforme cible implémente la révision
-1.38 », alors que le README et l'hypothèse § 1.6 déclarent la 1.38. Cette formulation est
-défendable mais fragile en évaluation : elle laisse entendre que la référence normative du
-projet serait la 1.59.
+1.59 », alors que le README et l'hypothèse § 1.6 déclarent la 1.59. La formulation est
+cohérente, mais une référence croisée à la 1.38 existe dans les annexes et références.
 
 **Recommandation.** Dans la prochaine itération de l'analyse :
 
-- citer la **1.38** comme norme applicable, avec sa date [1] ;
-- citer la **1.59 et les révisions ultérieures** [7] comme référence documentaire des
-  clarifications, en renvoyant au présent fichier pour la comparaison ;
+- citer la **1.59** comme norme applicable, avec sa date [6] ;
+- citer la **1.38 et les révisions antérieures** [1] comme référence documentaire historique,
+  en renvoyant au présent fichier pour la comparaison ;
 - renvoyer aux errata [2] pour la liste des points d'interprétation à qualifier.
 
 > ⚠️ **Attention à la collision de numérotation.** Dans `EBIOS-RM-analysis.md`, `[[4]]`

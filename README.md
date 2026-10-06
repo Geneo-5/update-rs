@@ -4,7 +4,7 @@ Système de mise à jour pour plateforme embarquée (type SolidRun Clearfog), é
 
 Objectifs :
 
-- authenticité et confidentialité du payload, ancrées dans un TPM 2.0 (révision 1.38 de la spécification TCG) ;
+- authenticité et confidentialité du payload, ancrées dans un TPM 2.0 (révision 1.59 de la spécification TCG) ;
 - format d'archive de mise à jour **streamable** à la récupération (créée offline) ;
 - cross-compilation vers la cible principale, la Clearfog Pro (ARMv7, `armv7-unknown-linux-gnueabihf`) ;
 - primitives cryptographiques issues des mêmes bibliothèques que les projets GitHub de l'ANSSI.
