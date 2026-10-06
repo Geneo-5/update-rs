@@ -662,7 +662,7 @@ Limite du modèle : la confidentialité est opposable aux attaquants sans device
 - Chaîne de boot complète (vérification du binaire `updated` au boot)
 - Attestation distante (détection de TPM remplacé)
 
-**Vraisemblance** : **V2 Vraisemblable**
+**Vraissemblance** : **V3 Très vraisemblable** (réévalué de V2 : le worker n'est pas isolé par un PID namespace ni par un user namespace ; un root local peut potentiellement lire `/proc/<pid>/mem` du worker, ou exploiter une vulnérabilité IPC pour monter en privilèges vers le supervisor. La fenêtre est courte mais le vecteur est documenté sur de multiples implantations. **Contre-mesure** : masquer /proc via `hidepid=2`, ou exécuter le worker dans un user namespace conditionnel (`CLONE_NEWUSER`) dès que le kernel le supporte sur l'architecture cible.)
 
 **Gravité** : **G4 CRITIQUE**
 
@@ -729,7 +729,7 @@ Limite du modèle : la confidentialité est opposable aux attaquants sans device
 **Mitigations manquantes** :
 - Aucune (mitigations complètes)
 
-**Vraisemblance** : **V1 Peu vraisemblable**
+**Vraissemblance** : **V3 Très vraisemblable** (réévalué de V1 : un attaquant avec accès physique à la flash (dessoudage) contrôle déjà le système et peut modifier librement le compteur. Sans accès physique, un root local peut écrire sur le device character du TPM NV index (`/dev/tpm0` ou `/dev/tpmrm0`) si les permissions ne sont pas strictement restreintes (owner-only, 0600) ; les fichiers de compteur de backup sur la partition système sont accessibles via les bind mounts jail→hôte si les règles fsset sont mal configurées. Contre-mesure : permissions 0600 sur le device NV TPM, lecture/écriture du compteur protégée par vérification PCR croisée, backup sur partition séparée signée, monitoring des accès TPM par audit kernel.)
 
 **Gravité** : **G3 GRAVE** (si réussi → ER6 : rollback vers version vulnérable)
 
