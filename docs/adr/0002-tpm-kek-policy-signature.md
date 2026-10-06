@@ -1,6 +1,6 @@
 # ADR-0002 — Profil TPM : KEK AES avec policy liée à la signature ECC du header
 
-- Statut : Proposé
+- Statut : Proposé (point bloquant : provisioning de la KEK, voir [03-tpm.md](../spec/03-tpm.md) « Provisioning »)
 - Date : 2026-10-06
 
 ## Contexte
@@ -12,7 +12,7 @@ Le système doit garantir que :
 3. **Non-exportabilité** : la clé de déchiffrement ne quitte jamais le TPM.
 4. **Résistance à l'écoute bus** : un attaquant écoutant SPI/I2C ne doit pas obtenir les secrets (REQ-THR-5).
 
-Les options A (clé scellée en RAM) et B (ECDH via TPM) discutées précédemment présentaient chacune des inconvénients :
+Deux profils alternatifs ont été écartés (options 1 et 2 ci-dessous) :
 - Profil A : la clé transite en RAM, exposée à un attaquant A6 (compromission logicielle partielle).
 - Profil B : pas d'ECDH P-256 + KEM hybride dans les listes ANSSI, glue à écrire, pas de composante PQ.
 

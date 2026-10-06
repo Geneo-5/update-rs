@@ -21,7 +21,7 @@ Le TPM héberge trois objets cryptographiques liés :
 |---|---|---|---|---|
 | **SRK** | Clé de stockage primaire (RSA-2048 ou ECC P-256) | Parent de tous les objets du projet | Non (fixe) | Aucune (ouverte) |
 | **Clé de vérification ECC (publique)** | ECC P-256 (publique uniquement) | Vérification de la signature du header | Oui (publique) | Aucune |
-| **KEK** | Clé symétrique AES-256 (scellée) | Déchiffrement AES Keywrap de la clé de session | Non | Policy composée (voir ci-dessous) |
+| **KEK** | Clé symétrique AES-256 (objet `TPM_ALG_SYMCIPHER`, blob privé protégé par la SRK ; jamais « scellée » au sens `TPM2_Unseal`) | Déchiffrement AES Keywrap de la clé de session | Non | Policy composée (voir ci-dessous) |
 
 ### Policy de la KEK
 
@@ -36,6 +36,8 @@ La KEK a une `authPolicy` composée qui **autorise son usage en déchiffrement u
 
 **Lien signature ↔ usage de la KEK** : la signature du header sert de **token de vérification**. Le TPM vérifie la signature ECDSA du header avant de satisfaire la policy de la KEK. L'altération du header en RAM du processus n'est pas un scénario vraisemblable : le header est reçu via socket stream et traité immédiatement par le processus fils de vérification.
 
+> **Précision à spécifier** : `TPM2_VerifySignature` renvoie un ticket, mais `TPM2_PolicyAuthorize` ne consomme que le ticket d'une signature portant sur `H(approvedPolicy ‖ policyRef)`, pas sur un header. La policy ne prouve donc pas, par elle-même, que *ce* header a été vérifié. Pour que le TPM refuse de déballer une clé issue d'un autre header, il faut lier la policy au bundle (par exemple `policyRef` = `bundle_id`, ou `PolicyCpHash` sur les données à déchiffrer, comme dans le mécanisme x3). Sinon la vérification du header reste logicielle et le TPM peut servir d'oracle de déchiffrement pour tout bloc chiffré sous la KEK.
+
 ### Clé de session (master key)
 
 La clé de session (master key de 256 bits, dont les clés de chunk sont dérivées par HKDF) est générée côté éditeur pour chaque bundle, puis **encapsulée avec AES Key Wrap with Padding (RFC 5649)** par la KEK. Le résultat (ciphertext de 40 octets pour une clé de 32 octets) est placé dans le header du bundle.
@@ -46,10 +48,10 @@ La clé de session (master key de 256 bits, dont les clés de chunk sont dériv�
 
 **Processus** (cas nominal : le TPM supporte AES Keywrap nativement ; sinon, voir « Mécanisme alternatif x3 » plus bas) :
 
-1. Le **TPM calcule lui-même le hash du header** via `TPM2_HashSequenceStart` + `TPM2_SequenceUpdate` + `TPM2_SequenceComplete` (mode PCR process). Le buffer du header est transmis par chunks au TPM.
+1. Le **TPM calcule lui-même le hash du header** (`header[0..208]`) via `TPM2_HashSequenceStart` + `TPM2_SequenceUpdate` + `TPM2_SequenceComplete` (ou le logiciel, voir REQ-TPM-9). Le buffer est transmis par morceaux au TPM.
 2. Le TPM vérifie la signature ECC du header via `TPM2_VerifySignature` sur le hash qu'il a calculé.
 3. Le TPM satisfait la policy de la KEK via `PolicyAuthorize` (voir détail ci-dessous).
-4. Le TPM déchiffre directement la clé de session encapsulée (AES Keywrap RFC 5649) via `TPM2_Duplicate` ou `TPM2_Unwrap` et la retourne au logiciel (dans une session chiffrée).
+4. Le TPM déchiffre la clé de session encapsulée et la retourne au logiciel (dans une session chiffrée). **Aucune commande TPM 2.0 standard ne réalise AES Key Wrap** : `TPM2_Unwrap` n'existe pas et `TPM2_Duplicate` n'est pas un AES-KW. Le mode natif suppose donc une commande propriétaire du composant ; sur un TPM standard, seul le mécanisme x3 (`TPM2_EncryptDecrypt2`) est réalisable.
 5. La KEK **ne quitte jamais le TPM**. Seule la clé de session (32 octets) est retournée au logiciel.
 
 ### Mécanisme `PolicyAuthorize` (détail)
@@ -60,20 +62,20 @@ La clé de session (master key de 256 bits, dont les clés de chunk sont dériv�
 1. **Pré-calcul du digest de policy** : lors du provisioning, la policy complète de la KEK est calculée sous forme de digest (SHA-256). Notation simplifiée : le TPM calcule en réalité le digest par extensions successives (`H(digest_précédent || commandCode || arguments)`).
    ```
    policyDigest = SHA256(
-     TPM2_PolicyCommandCode(TPM2_CC_Duplicate) ||
+     TPM2_PolicyCommandCode(TPM2_CC_EncryptDecrypt2) ||
      TPM2_PolicyPCR(pcr_selection, pcr_digest) [optionnel]
    )
    ```
-2. **Signature de la policy** : l'éditeur signe cette policy avec sa clé privée ECC P-256 :
+2. **Signature de la policy** : l'éditeur signe avec sa clé privée ECC P-256 le digest `aHash = H(approvedPolicy ‖ policyRef)` :
    ```
-   policySignature = ECDSA_Sign(private_key, policyDigest)
+   policySignature = ECDSA_Sign(private_key, aHash)
    ```
 3. **Vérification runtime** : lors de la mise à jour, le logiciel envoie au TPM :
-   - La policy (reconstruite dynamiquement)
-   - La signature `policySignature`
-   - La clé publique de vérification (déjà dans le TPM)
+   - la policy approuvée (`approvedPolicy`) et `policyRef`
+   - la signature `policySignature`
+   - la clé de vérification (déjà chargée dans le TPM)
    
-   Le TPM vérifie la signature via `TPM2_VerifySignature` et, si valide, satisfait la policy de la KEK.
+   Le TPM vérifie la signature via `TPM2_VerifySignature`, ce qui produit un ticket ; ce ticket est passé à `TPM2_PolicyAuthorize`, qui satisfait alors la policy de la KEK.
 
 **Avantage** : la policy peut être mise à jour côté éditeur (en changeant la signature) sans re-provisionner la KEK dans le TPM.
 
@@ -81,7 +83,7 @@ La clé de session (master key de 256 bits, dont les clés de chunk sont dériv�
 
 **Deux modes d'encapsulation sont supportés** (le choix dépend du TPM cible) :
 
-1. **Mode natif** : le TPM supporte AES Key Wrap (RFC 5649) via une commande spécifique (`TPM2_Duplicate` ou `TPM2_Unwrap` selon l'implémentation).
+1. **Mode natif** : le TPM expose une commande d'AES Key Wrap (RFC 5649). **Aucune commande standard ne le fait** (ni `TPM2_Unwrap`, qui n'existe pas, ni `TPM2_Duplicate`) : ce mode n'est possible que via une extension propriétaire du composant.
 2. **Mode x3** : le TPM ne supporte pas AES Key Wrap, mais supporte `TPM2_EncryptDecrypt2` avec AES-ECB. Un mécanisme alternatif utilisant 3 déchiffrements AES via policies TPM restreintes est utilisé.
 
 **Vérification au provisioning** : lors du provisioning, le fabricant DOIT vérifier lequel des deux modes est supporté par le TPM (`TPM2_GetCapability`). Si le TPM ne supporte ni l'un ni l'autre, il DOIT être rejeté.
@@ -101,7 +103,7 @@ La clé de session (32 octets) est encapsulée côté éditeur dans un format d�
 #### Encapsulation côté éditeur (x3)
 
 1. Générer la clé de session `S` (32 octets).
-2. Calculer un tag d'intégrité : `T = HMAC-SHA256(KEK, S)[0..8]` (8 octets).
+2. Calculer un tag de confirmation : `T = SHA-256("update-rs/x3" || bundle_id || S)[0..8]` (8 octets). Le device ne dispose pas de la KEK et ne peut donc pas recalculer un HMAC clé par la KEK ; l'intégrité de `C1 || C2 || C3` est déjà garantie par la signature du header, et `T` ne sert qu'à détecter un mauvais déchiffrement.
 3. Construire le plaintext encapsulé : `P = T || S` (40 octets).
 4. Découper P en 3 blocs de 16 octets (padding PKCS#7 pour le dernier) :
    - `B1 = P[0..16]`
@@ -145,7 +147,7 @@ Chaque branche lie cryptographiquement les arguments de la commande (cpHash), ce
 
 #### Assemblage côté logiciel
 
-Le logiciel reçoit les 3 plaintexts B1, B2, B3 du TPM, les assemble en P, vérifie le tag HMAC, et extrait la clé de session S.
+Le logiciel reçoit les 3 plaintexts B1, B2, B3 du TPM, les assemble en P, recalcule `T` à partir de `S` et de `bundle_id`, compare en temps constant, et extrait la clé de session S.
 
 #### Propriétés de sécurité
 
@@ -201,12 +203,12 @@ Le daemon de mise à jour (`updated`) DOIT tourner en tant que **root** pour pou
 - **REQ-TPM-1** — Les sessions TPM sensibles DOIVENT être salées, chiffrées et authentifiées (via une clé de chiffrement ECC du TPM : EK ou SRK).
 - **REQ-TPM-2** — L'ancre de confiance (hash des clés publiques de vérification ECC) DOIT être stockée dans un index NV verrouillé en écriture.
 - **REQ-TPM-3** — Un compteur NV monotone DOIT porter l'anti-rollback ; il n'est incrémenté qu'après validation d'une mise à jour (commit). Le compteur DOIT utiliser l'attribut `TPMA_NV_COUNTER` du TPM, qui garantit qu'il ne peut que s'incrémenter (pas de décrément, pas de réinitialisation sans clear TPM).
-- **REQ-TPM-4** — Les secrets descellés (KEK, clé de session) DOIVENT être zeroizés après usage (`mlock` + `madvise(DONTDUMP)`) et ne jamais être swappés.
+- **REQ-TPM-4** — Les secrets transitoires (clé de session, plaintexts B1 à B3 du mécanisme x3) DOIVENT être zeroizés après usage (`mlock` + `madvise(DONTDUMP)`) et ne jamais être swappés. La KEK n'existe jamais en dehors du TPM.
 - **REQ-TPM-5** — La KEK DOIT avoir `sign=0`, `decrypt=1`, `restricted=0` dans ses attributs `TPMA_OBJECT`.
-- **REQ-TPM-6** — Le TPM cible DOIT supporter soit le déchiffrement AES Keywrap (RFC 5649) en interne via `TPM2_Duplicate` ou `TPM2_Unwrap` (mode natif), soit le mécanisme alternatif x3 (3 déchiffrements AES via policies TPM restreintes). Si le TPM ne supporte ni l'un ni l'autre, il DOIT être rejeté lors du provisioning.
+- **REQ-TPM-6** — Le TPM cible DOIT supporter soit un déchiffrement AES Keywrap (RFC 5649) en interne via une commande propriétaire du composant (mode natif ; aucune commande standard), soit le mécanisme alternatif x3 (3 déchiffrements AES via policies TPM restreintes, `TPM2_EncryptDecrypt2` en ECB). Si le TPM ne supporte ni l'un ni l'autre, il DOIT être rejeté lors du provisioning.
 - **REQ-TPM-7** — La KEK NE DOIT JAMAIS être utilisable hors de sa policy (aucun `authValue` simple ne doit permettre de contourner la policy).
 - **REQ-TPM-8** — Le daemon de mise à jour DOIT tourner en tant que root et forker un processus fils dédié à la vérification du header.
-- **REQ-TPM-9** — Le hash du header PEUT être calculé par le TPM lui-même via `TPM2_HashSequenceStart` + `SequenceUpdate` + `SequenceComplete` (mode PCR process), ou par le logiciel. Le header arrive en RAM du daemon via socket stream, et l'altération du header en RAM du processus n'est pas un scénario vraisemblable. Le calcul software du hash est acceptable si le TPM ne supporte pas `TPM2_HashSequenceStart`.
+- **REQ-TPM-9** — Le hash du header PEUT être calculé par le TPM lui-même via `TPM2_HashSequenceStart` + `SequenceUpdate` + `SequenceComplete`, ou par le logiciel. Le header arrive en RAM du daemon via socket stream, et l'altération du header en RAM du processus n'est pas un scénario vraisemblable. Le calcul software du hash est acceptable si le TPM ne supporte pas `TPM2_HashSequenceStart`.
 - **REQ-TPM-10** — La policy de la KEK DOIT utiliser `PolicyAuthorize` pour permettre la mise à jour de la policy côté éditeur sans re-provisionner la KEK dans le TPM.
 - **REQ-TPM-11** — Le TPM DOIT être ancré dans une chaîne de boot vérifiée (secure boot → bootloader vérifié → kernel vérifié → rootfs vérifié → `updated` vérifié → TPM policy/PCR).
 
@@ -214,7 +216,8 @@ Le daemon de mise à jour (`updated`) DOIT tourner en tant que **root** pour pou
 
 1. **Clé primaire** : SRK (Storage Root Key) déterministe, créée sous la hiérarchie `TPM2_RH_OWNER`.
 2. **Clé de vérification ECC** : clé publique P-256 (côté éditeur) chargée dans le TPM via `TPM2_LoadExternal` (publique uniquement, pas de partie privée).
-3. **KEK AES-256** : créée via `TPM2_Create` avec `authPolicy` composée (PolicyAuthorize + PolicyPCR optionnel). Stockée scellée sous la SRK.
+3. **KEK AES-256** : créée via `TPM2_Create` avec `authPolicy` composée (PolicyAuthorize + PolicyPCR optionnel), protégée sous la SRK.
+   > **Point bloquant à trancher** : l'éditeur chiffre la clé de session (ou les blocs x3) *avec la KEK* ; il doit donc la connaître. Une KEK générée dans le TPM (`fixedTPM=1`) est inconnue de l'éditeur, et une KEK générée côté éditeur puis importée (`TPM2_Import`) doit être duplicable, donc pas `fixedTPM`. Choix à faire : KEK générée par l'éditeur et importée (copie côté éditeur, voir `../key-management.md` § 7.2), avec perte de la propriété « non exportable » au sens TPM ; ou clé asymétrique résidente (RSA-OAEP / ECDH) dont seule la partie publique est connue de l'éditeur.
 4. **Index NV de l'ancre de confiance** : hash de la clé de vérification ECC publique, verrouillé en écriture (`TPMA_NV_WRITEDEFINE`).
 5. **Compteur NV anti-rollback** : index NV monotone (`TPMA_NV_COUNTER`).
 6. **Sessions chiffrées** : EK (Endorsement Key) ECC P-256 déjà présente, ou SRK, comme clé de salage.

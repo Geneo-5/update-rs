@@ -1,6 +1,7 @@
 # ADR-0003 — Payload exécuté dans un environnement jail (tmpfs + bind mounts + seccomp)
 
-**Statut** : Accepté (brouillon, mis à jour le 2026-10-06)
+- Statut : Accepté
+- Date : 2026-10-06 (dernière révision de fond ; date de création non consignée)
 
 ## Contexte
 

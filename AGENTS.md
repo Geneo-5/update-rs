@@ -362,3 +362,26 @@ Aucune PR ne peut être mergée si :
 - **Questions ouvertes** : voir les sections « Questions ouvertes » de chaque spec
 
 En cas de doute sur une décision architecturale, **ne pas deviner** — créer un nouvel ADR ou poser la question.
+
+---
+
+## 12. Attribution des commits
+
+Seuls les **commits** créés par un agent s'attribuent — et *seulement dans le
+message de commit*, **jamais** dans la documentation ni dans le code :
+
+~~~
+Agent: <nom de l'outil CLI de la session>
+Model: <nom du modèle de la session>
+~~~
+
+`<nom de l'outil CLI de la session>` est l'agent (le hâble) qui opère :
+`Claude Code`, `Codex`, `OpenHands`, … ; `<nom du modèle de la session>` est le
+modèle indiqué dans le bloc d'environnement de la session en cours (par ex.
+`ornith-ai/Ornith-1.5-…`).
+
+Ces deux champs **reflètent** l'état de la session en cours : ils ne doivent
+**jamais** être écrits en dur à « Claude Code ». Si la session tourne sur `Codex`
+ou `OpenHands`, ils portent le nom de l'outil et du modèle réels. Ce n'est pas
+un tag GPL ni une licence : c'est la signature de ce qui a exécuté
+l'opération.

@@ -6,3 +6,6 @@
 /secrets/
 *.pem
 *.key
+# État local de l'assistant (verrou de tâches planifiées, réglages locaux)
+/.claude/scheduled_tasks.lock
+/.claude/settings.local.json

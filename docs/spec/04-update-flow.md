@@ -72,6 +72,8 @@ fn handle_signal(sig: Signal) {
 
 ## Exigences
 
+> **Portée de REQ-FLW-1 à 3** : depuis la décision « A/B géré par le script du payload » (voir [06-jail.md](06-jail.md)), ces trois exigences ne sont plus garanties par `updated` : elles constituent un **contrat imposé au script d'entrée de l'éditeur** (et au bootloader). Le daemon ne peut ni les vérifier ni les faire respecter ; il faut soit les déplacer dans un document de contrat payload, soit les faire valider par des tests d'intégration.
+
 - **REQ-FLW-1** — Le slot actif ne DOIT jamais être modifié pendant une mise à jour.
 - **REQ-FLW-2** — Une coupure d'alimentation à n'importe quel point DOIT laisser un système bootable.
 - **REQ-FLW-3** — Un échec de health-check ou un nombre de tentatives dépassé DOIT déclencher un rollback automatique.
@@ -91,7 +93,7 @@ fn handle_signal(sig: Signal) {
 4. Mises à jour partielles/delta : hors périmètre v1 ? **Hors scope** : pas de delta updates en v1.
 5. ~~Déclenchement : pull périodique, push, commande manuelle (`updatectl`) ?~~ **Résolu** : **client compatible cron** qui check une URI. Le daemon `updated` ne fait pas de pull automatique. Un client externe (script cron, service systemd timer) appelle `updatectl check <URI>` pour vérifier les mises à jour disponibles, puis `updatectl apply` pour les appliquer.
 6. ~~Persistance de l'état du jail entre exécutions : le jail peut-il laisser des artefacts sur l'hôte ?~~ **Résolu** : pas de persistance du jail (éphémère, tmpfs). Reboot si update réussie.
-7. ~~Rollback après échec du jail : faut-il pouvoir relancer un jail précédent, ou retourner à Idle ?~~ **Résolu** : si le jail échoue, rien n'a été modifié (tmpfs éphémère), le daemon retourne à Idle. Si on rentre dans le jail, c'est au script de gérer le rollback (voir [06-jail.md](06-jail.md) section « Modèle A/B et rollback »).
+7. ~~Rollback après échec du jail : faut-il pouvoir relancer un jail précédent, ou retourner à Idle ?~~ **Résolu** : si le jail échoue, le slot actif est intact (le jail est un tmpfs éphémère) et le daemon retourne à Idle ; le slot inactif a pu être modifié par le script, qui gère son propre rollback (voir [06-jail.md](06-jail.md) section « Modèle A/B et rollback »).
 8. ~~La machine à états décrit l'exécution d'un payload dans un jail, alors que REQ-FLW-1 à 3 supposent un modèle A/B (slot inactif, health-check, rollback) absent des états ci-dessus.~~ **Résolu** : le modèle A/B est géré par le script dans le jail, pas par le daemon. Le daemon charge le payload et exécute le script ; le script gère l'écriture dans le slot inactif, le commit, et le rollback si échec.
 
 ## Client compatible cron

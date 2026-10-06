@@ -323,7 +323,7 @@ Identifiants `JE*` (jail, évasion), distincts des menaces J1 à J4 de [01-threa
 
 ~~**Question** : Faut-il ajouter `CLONE_NEWUSER` pour isoler les UID ?~~
 
-**Décision** : **pas de `CLONE_NEWUSER`**. Le daemon `updated` doit tourner en root pour accéder au TPM, monter/démonter des filesystems, et écrire sur les devices MTD/block. `CLONE_NEWUSER` est incompatible avec cette architecture. Le jail utilise `setresuid`/`setresgid` pour déprivilégier le processus fils avant `execve`, ce qui est suffisant pour un payload éphémère.
+**Décision** : **pas de `CLONE_NEWUSER`**. Le jail utilise `setresuid`/`setresgid` pour déprivilégier le processus fils avant `execve`, ce qui est suffisant pour un payload éphémère. Justification corrigée : root *peut* créer un user namespace ; ce qui l'exclut est l'impossibilité de `mknod` de vrais périphériques dans un user namespace non initial, alors que le script A/B doit écrire sur les block devices du slot inactif (à confirmer sur le noyau cible).
 
 Voir [06-jail.md](06-jail.md) section « Choix de design » pour le détail.
 
@@ -331,7 +331,7 @@ Voir [06-jail.md](06-jail.md) section « Choix de design » pour le détail.
 
 ~~**Question** : Faut-il ajouter `CLONE_NEWPID` pour isoler les PID ?~~
 
-**Décision** : **pas de `CLONE_NEWPID`**. Enbox n'utilise pas `CLONE_NEWPID` car il nécessite de gérer la logique `init` (processus PID 1 dans le namespace). Pour notre cas d'usage (payload éphémère exécutant un script), un simple `waitpid` suffit. Le timeout est géré par `timer_create` + `SIGALRM` qui envoie `SIGKILL` au processus jail.
+**Décision** : **pas de `CLONE_NEWPID`**. Enbox n'utilise pas `CLONE_NEWPID` car il nécessite de gérer la logique `init` (processus PID 1 dans le namespace). Pour notre cas d'usage (payload éphémère exécutant un script), un simple `waitpid` suffit. Le timeout est géré par `timer_create` + `SIGALRM` qui envoie `SIGKILL` au processus jail. Contrepartie à assumer : sans PID namespace, les orphelins ne sont détruits que par `cgroup.kill` ; avec `CLONE_NEWPID`, la sortie du PID 1 du namespace tue tous les processus restants.
 
 Voir [06-jail.md](06-jail.md) section « Choix de design » pour le détail.
 
@@ -531,9 +531,8 @@ Le guide Rust de l'ANSSI (https://anssi-fr.github.io/rust-guide/) contient des r
 | **FFI-CAPI** | Exposer uniquement une API C-compatible | ✅ OUI | API publique en `extern "C"` |
 
 **Actions concrètes** :
-- Utiliser `rust-bindgen` pour générer les bindings vers libtss2 (TPM)
-- Créer un crate `update-tpm-sys` avec les bindings bruts
-- Créer un crate `update-tpm` avec un wrapper safe
+- Utiliser `tss-esapi` (wrapper Rust de `tpm2-tss`) plutôt que de générer des bindings avec `rust-bindgen` : le code du projet reste sans `unsafe` (`forbid` au niveau workspace), l'`unsafe` étant confiné à la dépendance, à auditer (voir question ouverte 3 de [03-tpm.md](03-tpm.md))
+- Les crates `update-tpm-sys` et `update-syscalls` de la structure proposée plus haut ne sont pas retenus tant qu'un ADR ne justifie pas une exception à `unsafe_code = "forbid"` ; privilégier des wrappers safe (`rustix`, `signal-hook`) pour `openat2`, `prctl`, `mount` et les signaux
 - Chaque fonction FFI doit :
   - Vérifier les pointeurs (non-null)
   - Vérifier les valeurs (enum valides, bool ∈ {0, 1})
@@ -608,14 +607,14 @@ Le guide Rust de l'ANSSI (https://anssi-fr.github.io/rust-guide/) contient des r
 2. **Structurer le workspace** avec des crates séparés (safe/unsafe)
 3. **Créer `SecureBuffer<T>`** pour la gestion sécurisée de la mémoire
 4. **Décider de l'architecture daemon** (option 2 : père root + fils user)
-5. **Décider de l'utilisation de `CLONE_NEWUSER`** (option 3 : conditionnel)
-6. **Décider de l'utilisation de `CLONE_NEWPID`** (option 2 : obligatoire)
+5. ~~Décider de l'utilisation de `CLONE_NEWUSER`~~ **Tranché** : non (voir § 2.5)
+6. ~~Décider de l'utilisation de `CLONE_NEWPID`~~ **Tranché** : non (voir § 2.6)
 7. **Décider du stockage anti-rollback** (option 3 : NV TPM + fichier)
 
 ### 4.2 Actions importantes (à faire pendant implémentation)
 
 1. **Intégrer `cargo audit` et `cargo-deny`** dans la CI
-2. **Utiliser `rust-bindgen`** pour les bindings TPM
+2. **Utiliser `tss-esapi`** pour l'accès au TPM (pas de bindings `rust-bindgen` maison)
 3. **Implémenter `seccomp`** sur le daemon père
 4. **Implémenter `mlockall`** et `prctl(PR_SET_DUMPABLE, 0)`
 5. **Créer une whitelist de device nodes** autorisés

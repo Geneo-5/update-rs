@@ -162,7 +162,7 @@ Bundle demande → POLICY (machine) → allowed? → jail ou reject
 
 ## Corrections de cohérence documentaire
 
-### RFC 3394 → RFC 5649
+### RFC 3394 → RFC 5649 *(taille de clé de session obsolète : voir la section « Dérivation de clés par chunk » plus bas)*
 
 **Fichiers modifiés** :
 - ADR-0002 : référence corrigée
@@ -329,4 +329,4 @@ Les modifications appliquées renforcent significativement le modèle de sécuri
 - **TOCTOU éliminé** : openat2() avec RESOLVE_*
 - **Défense en profondeur** : cgroups, signal handlers async-signal-safe, cleanup garanti
 
-La spécification est maintenant suffisamment robuste pour passer à une implémentation de confiance, sous réserve de traiter les questions ouvertes restantes (chaîne de boot, PCRs, rollback du compteur NV).
+La spécification renforce le modèle de sécurité, mais n'est pas encore prête pour une implémentation de confiance : la relecture du 2026-10-07 a laissé ouverts le provisioning de la KEK (l'éditeur doit la connaître pour chiffrer), la liaison policy TPM ↔ header, la zone exécutable du jail (`noexec` vs `execve`) et le cadrage du flux de chunks (voir les questions ouvertes de `02`, `03` et `06`).

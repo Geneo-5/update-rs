@@ -58,7 +58,7 @@ au début de la séquence, puis se déprivilégie avant d'exécuter le script d'
 5. **Nœuds de périphériques** : `/dev` est partiellement peuplé via création manuelle de
    `chrdev` / `blkdev` nécessaires au payload (pas de `devtmpfs` complet).
 6. **Verrouillage final** : tous les points de montage internes sont remontés `ro,
-   nodev, nosuid, noexec` ; les namespaces sont figés ; l'entrypoint est lancé avec un
+   nodev, nosuid` (et `noexec`, sauf la zone qui contient l'entrypoint et son interpréteur, voir question ouverte 9) ; les namespaces sont figés ; l'entrypoint est lancé avec un
    profil de sécurité minimal (capabilities + securebits + seccomp).
 7. **Pas d'écriture sur l'hôte** : le jail NE PEUT PAS écrire sur l'hôte, sauf via
    l'API de sortie contrôlée fournie par le superviseur (descripteur de fichier, zone de logs uniquement ; voir « API de sortie contrôlée »).
@@ -95,7 +95,7 @@ au début de la séquence, puis se déprivilégie avant d'exécuter le script d'
                               ↓
 ┌────────────────────────────────────────────────────────────────┐
 │ Phase 3 : Verrouillage                                         │
-│  - remount ro,nosuid,nodev,noexec de tous les points           │
+│  - remount ro,nosuid,nodev de tous les points (noexec sauf zone exec)│
 │  - pivot_root() dans le tmpfs (l'ancien root devient privé)    │
 │  - déprivilégiation : setgroups, setresgid, setresuid          │
 │  - **Securebits stricts** :                                    │
@@ -147,14 +147,15 @@ au début de la séquence, puis se déprivilégie avant d'exécuter le script d'
   - Monter/démonter des filesystems
   - Écrire sur les devices MTD/block pour l'update
   - Créer des namespaces
-- `CLONE_NEWUSER` nécessite que le daemon soit non-root pour mapper les UIDs, ce qui est incompatible avec notre architecture.
-- Le jail utilise `setresuid`/`setresgid` pour déprivilégier le processus fils avant `execve`, ce qui est suffisant pour notre cas d'usage (payload éphémère).
+- `CLONE_NEWUSER` n'exige **pas** que le daemon soit non-root : root peut créer un user namespace et écrire `uid_map`. La vraie contrainte est ailleurs : dans un user namespace non initial, `mknod` de vrais périphériques est impossible et les devices de l'hôte ne sont utilisables que par bind mount. Cela entre en conflit avec les `chrdev`/`blkdev` du `fsset` et avec l'écriture sur les block devices du slot inactif par le script A/B (voir « Modèle A/B et rollback »). À confirmer par un test sur le noyau cible.
+- Le jail utilise `setresuid`/`setresgid` pour déprivilégier le processus fils avant `execve`, ce qui est suffisant pour notre cas d'usage (payload éphémère) tant que la décision ci-dessus tient.
 
 ### Pourquoi pas `CLONE_NEWPID` ?
 
 - Enbox n'utilise pas `CLONE_NEWPID` car il nécessite de gérer la logique `init` (processus PID 1 dans le namespace).
 - Pour notre cas d'usage (payload éphémère exécutant un script), un simple `waitpid` suffit pour attendre la fin du jail.
 - Le timeout est géré par un `timer_create` + `SIGALRM` qui envoie `SIGKILL` au processus jail.
+- Un `CLONE_NEWPID` aurait un avantage : quand le PID 1 du namespace sort, le noyau envoie `SIGKILL` à tous les autres processus du namespace, ce qui règle le problème des orphelins ci-dessous sans `cgroup.kill`. Le coût est que l'entrypoint devient PID 1 (il doit récolter ses enfants). Arbitrage ouvert, voir [07-security-analysis.md](07-security-analysis.md) § 2.6.
 - Si le processus jail fork des enfants, ils ne sont **pas** tués automatiquement à la fin du père : le monteur DOIT détruire tous les processus du jail via le cgroup v2 du jail (`cgroup.kill`, Linux ≥ 5.14, ou `SIGKILL` sur chaque PID de `cgroup.procs`). Un `kill(-pgid)` seul est insuffisant (un processus peut quitter son groupe via `setsid`).
 
 ### Pourquoi `CLONE_NEWNET` (réseau isolé) ?
@@ -260,7 +261,7 @@ flags = ["ro", "nodev", "nosuid", "noexec", "nosymfollow"]
 type = "payload_file"          # fichier extrait du bundle
 path = "/bin/entry.sh"
 source_ref = "rootfs/bin/entry.sh"   # référence dans le payload
-flags = ["ro", "nodev", "nosuid", "noexec"]
+flags = ["ro", "nodev", "nosuid"]   # pas de noexec : sinon execve de l'entrypoint échoue
 mode = 0o755
 
 [[jail.fsset]]
@@ -483,7 +484,7 @@ Le jail DOIT être contraint en ressources pour empêcher les attaques par exhau
 |---|---|---|
 | **PID** | `pids.max = 64` | Empêche les fork bombs |
 | **Mémoire** | `memory.max = 256M` | Limite l'allocation mémoire |
-| **CPU** | `cpu.max = 50%` (1 CPU sur 2) | Empêche l'épuisement CPU |
+| **CPU** | `cpu.max = 50%` d'un CPU (`50000 100000`) | Empêche l'épuisement CPU |
 | **I/O** | `io.max = 10 MB/s` | Limite la bande passante disque |
 
 **Implémentation** :
@@ -512,9 +513,10 @@ std::fs::write(format!("{}/cgroup.procs", cgroup_path), jail_pid.to_string())?;
 
 1. **Cleanup au démarrage** : au boot, `updated` vérifie la présence de mounts orphelins et les démonte :
    ```rust
-   // Au démarrage, scan de /proc/mounts pour les mounts orphelins
+   // Au démarrage, scan de /proc/mounts ; le champ `source` d'un tmpfs vaut "tmpfs" : filtrer sur la cible
+   // (répertoire de travail du jail, à fixer dans la configuration du daemon)
    let mounts = read_proc_mounts()?;
-   for mount in mounts.filter(|m| m.source.starts_with("/tmp/update-rs-")) {
+   for mount in mounts.filter(|m| m.target.starts_with(jail_workdir)) {
        umount2(mount.target, MNT_DETACH)?;
    }
    ```
@@ -537,6 +539,8 @@ Trois profils sont prévus :
 
 Les filtres BPF sont installés via `seccomp(SECCOMP_SET_MODE_FILTER, …)` après `pivot_root`
 et avant `execve` du script d'entrée.
+
+> **À corriger dans les profils** : le filtre étant installé avant l'`execve` de l'entrypoint, tous les profils DOIVENT autoriser `execve` (au moins pour l'entrypoint), ce que `strict` ne liste pas aujourd'hui. Un script shell a aussi besoin de `fork`/`clone`, `execve` et `wait4` pour lancer la moindre commande.
 
 ## Exigences
 
@@ -568,4 +572,6 @@ et avant `execve` du script d'entrée.
 7. **Compatibilité avec enbox** : doit-on reprendre sa config syntaxique (libconfig) ou
    opter pour TOML/JSON/CBOR ? (CBOR aligne avec le format de manifeste — à privilégier).
 8. ~~**Rollback** : si l'exécution du jail échoue, faut-il pouvoir relancer un jail
-   précédent, ou retourner à Idle ?~~ **Résolu** : si le jail échoue, rien n'a été modifié (tmpfs éphémère). Si on rentre dans le jail, c'est au script de gérer le rollback.
+   précédent, ou retourner à Idle ?~~ **Résolu** : si le jail échoue, le slot actif est intact (le jail est un tmpfs éphémère) ; le script A/B gère le rollback du slot inactif.
+9. **Zone exécutable** : l'entrypoint est un script, qui nécessite un interpréteur (`sh`, busybox) et des commandes. D'où viennent-ils (payload, bind mount hôte) ? Quelles zones sont sans `noexec` ? REQ-JAIL-12 (« aucun binaire issu du payload ») est incompatible avec un payload qui embarque son interpréteur.
+10. **Résolution des identités** : `user = "payload"` suppose un `/etc/passwd` dans le jail ; préférer des UID/GID numériques validés par la policy machine.

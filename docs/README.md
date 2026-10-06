@@ -19,7 +19,7 @@ document a un **statut** en tête de fichier (`Brouillon` → `En revue` → `St
 | [tpm-revisions-comparison.md](tpm-revisions-comparison.md) | Comparaison des révisions de la bibliothèque TPM 2.0 (1.59 → 1.84+, composants certifiés, impact projet) | Brouillon |
 | [key-management.md](key-management.md) | Cycle de vie complet des clés cryptographiques (`K-SIGN-REL`, `K-KEK-DEVICE`, `K-TPM-EK/AK`, Secure Boot, provisioning, rotation, révocation, destruction) — conforme ANSSI RGS B2 et NIST SP 800-57 | Brouillon |
 | [prerequis-integration.md](prerequis-integration.md) | Prérequis d'intégration et éléments hors scope `update-rs` (Secure Boot, provisioning TPM, MTD, supply chain, configuration Linux, CUP) — matrice de responsabilités (4 acteurs) | Brouillon |
-| [adr/](adr/) | Décisions d'architecture (une par fichier) | — |
+| [adr/](adr/) | Décisions d'architecture (une par fichier) : [0001 format dédié](adr/0001-custom-bundle-format.md), [0002 profil TPM](adr/0002-tpm-kek-policy-signature.md), [0003 jail](adr/0003-jail-environment.md) | — |
 | [EBIOS-RM-analysis.md](EBIOS-RM-analysis.md) | Analyse de risque EBIOS Risk Manager (ateliers 1 à 5, plan de traitement) | Brouillon |
 | [CHANGES-security-review.md](CHANGES-security-review.md) | Journal des modifications issues de la revue de sécurité du 2026-10-06 | — |
 
@@ -30,4 +30,5 @@ document a un **statut** en tête de fichier (`Brouillon` → `En revue` → `St
   être référencée dans le code, les tests et les ADR.
 - Les points non tranchés sont listés en **Questions ouvertes** à la fin de chaque
   document ; une question résolue donne lieu à un ADR puis disparaît de la liste.
+- Une question ouverte transverse (bootloader, PCR, anti-rollback…) n'est détaillée qu'à **un seul endroit** ; les autres documents y renvoient au lieu de la recopier.
 - Les décisions structurantes vont dans `adr/` (modèle : [adr/0000-template.md](adr/0000-template.md)).

@@ -27,22 +27,22 @@ L'en-tête a une **taille fixe** (padding éventuel) pour permettre un traitemen
 
 ### Composition de l'en-tête (Header)
 
-L'en-tête contient toutes les métadonnées nécessaires au traitement en streaming et à la vérification initiale. Tous ses champs, à l'exception de la signature et du padding, sont couverts par une signature ECC (ECDSA P-256 sur `SHA-256(header[0..200])`). Le padding n'est pas signé : le lecteur DOIT vérifier qu'il est entièrement à zéro.
+L'en-tête contient toutes les métadonnées nécessaires au traitement en streaming et à la vérification initiale. Tous ses champs, à l'exception des champs de signature et du padding, sont couverts par une signature ECC (ECDSA P-256 sur `SHA-256(header[0..208])`, c'est-à-dire les octets précédant `ecc_signature_r`). Les signatures Ed25519 et ML-DSA portent sur ces mêmes octets `header[0..208]`. Le padding n'est pas signé : le lecteur DOIT vérifier qu'il est entièrement à zéro.
 
-#### Structure binaire (esquisse, taille fixe 1024 octets)
+#### Structure binaire (esquisse, taille fixe 5120 octets — à valider)
 
 | Offset | Taille | Champ | Description |
 |---|---|---|---|
 | 0 | 4 | `magic` | `0x55505253` (`"UPRS"`) |
 | 4 | 2 | `header_version` | Version du format de header (ex: `0x0001`). Si une future version nécessite un header plus grand, elle aura un `header_version` différent et une taille différente. |
 | 6 | 2 | `alg_suite` | Suite algorithmique (ex: `0x0001` = AES-256-GCM-SIV + HKDF-SHA256 + ECDSA P-256 + SHA-256) |
-| 8 | 4 | `header_size` | Taille totale du header (constante par version, ex: 1024 pour v1) |
-| 12 | 4 | `min_firmware_version` | Version firmware minimale requise (anti-rollback, vérifié contre compteur NV TPM) |
+| 8 | 4 | `header_size` | Taille totale du header (constante par version, 5120 pour v1) |
+| 12 | 4 | `min_firmware_version` | Version firmware minimale requise sur le device (prérequis de compatibilité, comparé à la version firmware courante ; l'anti-rollback porte sur `bundle_version`, comparé au compteur NV) |
 | 16 | 4 | `bundle_version` | Version de ce bundle (monotone, incrémentée par l'éditeur) |
 | 20 | 4 | `chunk_size` | Taille nominale d'un chunk (configurable à la compilation, défaut : 64 KiB) |
 | 24 | 4 | `chunk_count` | Nombre total de chunks |
 | 28 | 32 | `manifest_hash` | SHA-256 du manifeste signé |
-| 60 | 32 | `bundle_hash` | SHA-256 de l'intégralité du bundle (header + manifeste + tous les chunks) |
+| 60 | 32 | `bundle_hash` | SHA-256 du flux qui suit le header (manifeste chiffré + tous les chunks chiffrés). Le header en est exclu : il contient ce champ (dépendance circulaire) et est déjà couvert par ses signatures |
 | 92 | 4 | `keywrap_alg` | `0x0001` = AES Key Wrap with Padding RFC 5649, `0x0002` = mécanisme x3 (3 AES-ECB) |
 | 96 | 32 | `kek_id` | Identifiant (hash) de la KEK cible dans le TPM |
 | 128 | 32 | `bundle_id` | Identifiant unique du bundle (UUID ou hash) |
@@ -50,16 +50,16 @@ L'en-tête contient toutes les métadonnées nécessaires au traitement en strea
 | 208 | 32 | `ecc_signature_r` | Composante r de la signature ECDSA P-256 (32 octets) |
 | 240 | 32 | `ecc_signature_s` | Composante s de la signature ECDSA P-256 (32 octets) |
 | 272 | 64 | `ed25519_signature` | Signature Ed25519 du header (64 octets, défense en profondeur classique) |
-| 336 | 3296 | `ml_dsa_signature` | Signature ML-DSA-87 du header (3296 octets, défense en profondeur post-quantique) |
-| 3632 | 140 | `padding` | Réservé, mis à zéro |
+| 336 | 4627 | `ml_dsa_signature` | Signature ML-DSA-87 du header (4627 octets, FIPS 204 ; défense en profondeur post-quantique) |
+| 4963 | 157 | `padding` | Réservé, mis à zéro |
 
-**Total : 1024 octets** (alignement sur secteur flash, taille augmentée pour contenir les signatures Ed25519 + ML-DSA)
+**Total : 5120 octets** (10 secteurs de 512 octets). L'esquisse précédente annonçait 1024 octets avec une signature ML-DSA de 3296 octets, ce qui dépassait la taille du header ; avec ML-DSA-65 (3309 octets) le header tiendrait en 4096 octets. Le choix du niveau ML-DSA reste à valider.
 
 **Note sur `wrapped_session_key`** : la clé de session est une *master key* de 32 octets (multiple de 8 : aucun padding RFC 5649 n'est nécessaire). Le ciphertext fait 8 octets (AIV RFC 5649) + 32 octets = **40 octets**. Les clés et nonces de chunks en sont dérivés (voir « Dérivation des clés »).
 
-**Note sur l'évolution du header** : si une future version nécessite un header plus grand (ex: 1024 octets), elle aura :
+**Note sur l'évolution du header** : si une future version nécessite un header plus grand, elle aura :
 - Un `header_version` différent (ex: `0x0002`)
-- Un `header_size` différent (ex: 1024)
+- Un `header_size` différent
 - Le lecteur DOIT vérifier que `header_version` est supporté avant de lire les champs suivants
 
 #### Détail des champs sensibles
@@ -71,20 +71,23 @@ L'en-tête contient toutes les métadonnées nécessaires au traitement en strea
   - La KEK (Key Encryption Key) réside de manière non exportable dans le TPM du dispositif cible (voir `03-tpm.md`) et **ne quitte jamais le TPM**. Le TPM effectue le déchiffrement AES Keywrap en interne et retourne uniquement la clé de session déballée (32 octets) via une session chiffrée.
 
 - **Signature ECC** (`ecc_signature_r` + `ecc_signature_s`) :
-  - Signature ECDSA P-256 calculée sur `SHA-256(header[0..200])` (tous les champs sauf signature et padding).
+  - Signature ECDSA P-256 calculée sur `SHA-256(header[0..208])` (tous les champs sauf signatures et padding).
   - La clé publique de vérification est stockée dans le TPM (publique uniquement).
+  - Les clés publiques Ed25519 et ML-DSA, vérifiées par le logiciel, ont aussi besoin d'une ancre de confiance (hash dans l'index NV, voir REQ-TPM-2) : à spécifier.
 
 ### Flux de validation
 
-1. **Extraction** : Le lecteur lit les 512 premiers octets du bundle (le header).
+1. **Extraction** : Le lecteur lit les `header_size` premiers octets du bundle (5120 pour la version 1). Il lit d'abord la taille fixe de la version courante, puis rejette si `magic`, `header_version` ou `header_size` ne correspondent pas.
 2. **Vérification de magic/version** : Rejet immédiat si magic ou `header_version` invalide.
 3. **Vérification de taille** : `header_size` doit correspondre à la taille attendue pour cette version.
 4. **Vérification anti-rollback (version)** : `bundle_version` doit être > dernière version installée (stockée dans un index NV TPM ou fichier persistant).
 5. **Vérification anti-rollback (firmware)** : `min_firmware_version` doit être ≤ version firmware actuelle du device.
-6. **Hash du header (par le TPM ou logiciel)** : Le lecteur transmet le buffer du header au TPM via `TPM2_HashSequenceStart` + `SequenceUpdate` + `SequenceComplete` (mode PCR process) si supporté, ou calcule le hash en software (le header arrive en RAM via socket stream, l'altération en RAM n'est pas un scénario vraisemblable).
+6. **Hash du header (par le TPM ou logiciel)** : Le lecteur transmet `header[0..208]` au TPM via `TPM2_HashSequenceStart` + `SequenceUpdate` + `SequenceComplete` si supporté, ou calcule le hash en software (le header arrive en RAM via socket stream, l'altération en RAM n'est pas un scénario vraisemblable).
 7. **Vérification de signature ECC** : Le TPM vérifie la signature ECDSA via `TPM2_VerifySignature` sur le hash qu'il a calculé (sous session chiffrée).
 8. **Déchiffrement de la clé de session** : Le TPM satisfait la policy de la KEK et déchiffre `wrapped_session_key` (sous session chiffrée). Voir `03-tpm.md` pour le détail du mécanisme (AES Keywrap natif ou mécanisme alternatif x3 avec policies restreintes).
 9. **Streaming** : Une fois la clé de session obtenue, le lecteur dérive la clé et le nonce de chaque chunk (HKDF) puis les déchiffre et les authentifie en streaming (AEAD).
+
+> Les contrôles 2 à 5 sont des rejets rapides sur des champs **non encore authentifiés** : ils ne doivent jamais servir à accepter, et leurs valeurs ne doivent piloter aucune allocation avant la vérification de la signature (étape 7).
 
 ### Exigences supplémentaires
 
@@ -206,6 +209,8 @@ Voir [05-crypto.md](05-crypto.md) pour l'analyse détaillée de conformité.
 6. ~~Taille de chunk, et bornes maximales acceptées par le lecteur.~~ **Résolu** : taille de chunk configurable à la compilation (défaut : 64 KiB). Bornes maximales configurables à la compilation (défaut : 10 MiB par chunk, 1000 chunks max).
 7. ~~Champ `tree_root` : l'authentification des chunks reposant sur la chaîne AEAD (voir ci-dessus), le champ est-il conservé (arbre de hachage) ou retiré du header ?~~ **Résolu** : **retiré** du header. L'authentification des chunks repose sur la chaîne AEAD (AES-GCM-SIV par chunk avec AAD structurée). Un arbre de hachage (Merkle tree) serait redondant et ajouterait de la complexité.
 8. ~~Taille maximale du manifeste : chiffré comme un message AEAD unique, il est entièrement tamponné avant vérification du tag (REQ-BUN-5, REQ-BUN-6). Quelle borne ?~~ **Résolu** : taille maximale du manifeste **configurable à la compilation** (défaut : 1 MiB). Au-delà, le manifeste est rejeté.
+10. **Cadrage du flux** : le header ne contient pas la longueur du manifeste chiffré (`manifest_length`, pourtant utilisée dans son AAD), et le découpage des chunks dans le flux (préfixe de longueur, taille variable ou fixe) n'est pas spécifié. Il manque aussi la correspondance entre chunks et artefacts du manifeste (plages de chunks par image).
+11. **Compression** : bornes de décompression (taux, taille de sortie) à définir pour éviter une bombe de décompression, même sur un bundle authentifié (REQ-BUN-6).
 9. ~~Emplacement des signatures Ed25519 + ML-DSA évoquées dans [05-crypto.md](05-crypto.md) : le header n'embarque que la signature ECDSA P-256 (vérifiée par le TPM). Ces signatures sont-elles les « signatures internes » du manifeste ?~~ **Résolu** : les signatures Ed25519 + ML-DSA sont placées dans le **header** (après la signature ECDSA P-256). Elles sont vérifiées par le logiciel (pas par le TPM) et servent de défense en profondeur (hybride classique + post-quantique). Le header est agrandi pour les contenir (voir section « Composition de l'en-tête »).
 
 ## Hash global du bundle + AES-GCM par chunk
@@ -214,7 +219,7 @@ Voir [05-crypto.md](05-crypto.md) pour l'analyse détaillée de conformité.
 
 **Solution** : double garantie d'intégrité :
 
-1. **Hash global du bundle** : un hash SHA-256 de l'intégralité du bundle (header + manifeste + tous les chunks) est calculé côté éditeur et placé dans le header (signé par ECDSA P-256). Le daemon vérifie ce hash après avoir reçu et traité tous les chunks, **avant de lancer l'entry point** (script/bin).
+1. **Hash global du flux** : un hash SHA-256 du flux qui suit le header (manifeste chiffré + tous les chunks chiffrés ; le header est exclu car il contient ce hash) est calculé côté éditeur et placé dans le header (signé par ECDSA P-256). Le daemon vérifie ce hash après avoir reçu et traité tous les chunks, **avant de lancer l'entry point** (script/bin).
 
 2. **AES-GCM par chunk** : chaque chunk est chiffré et authentifié individuellement avec AES-256-GCM-SIV. Le daemon garantit l'intégrité de chaque chunk avant de le traiter (écriture dans le jail ou le slot inactif).
 
