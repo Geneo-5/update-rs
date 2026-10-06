@@ -269,9 +269,12 @@ SR3 (accès physique flash hors tension)
 
 **Gravité** : **G4 CRITIQUE** (si réussi → ER1 : firmware malveillant installé)
 
-**Vraisemblance** : **V2 Vraisemblable** (accès physique requis, mais pas de chaîne de boot complète actuellement)
+**Vraisemblance** : **V1* Peu vraisemblable si chaîne de boot complète** / **V2** Vraisemblable si chaîne de boot incomplète
 
-**Risque résiduel** : **MOYEN** (chaîne de boot incomplète, voir Atelier 5)
+**Risque résiduel** : **FAIBLE*** / **MOYEN** **
+
+> **Note** : La chaîne de boot est **hors scope** du projet `update-rs` (décision 1.5) et imposée comme **prérequis d'intégration** (`prerequis-integration.md` § 3). Si l'intégrateur respecte ce prérequis, V2 → V1. Sinon, le risque reste MOYEN.
+
 
 ---
 
@@ -303,7 +306,9 @@ SR5 (root post-boot, via vulnérabilité kernel ou service exposé)
 
 **Vraisemblance** : **V3 Très vraisemblable** (accès root déjà obtenu, plusieurs vecteurs d'attaque)
 
-**Risque résiduel** : **ÉLEVÉ** (surface d'attaque importante, nécessité de défense en profondeur)
+**Risque résiduel** : **ÉLEVÉ** (surface d'attaque importante)
+
+> **Défense en profondeur** : Avec `hidepid=2` sur /proc, seccomp sur le supervisor, et cgroups, V3 peut être réduit à **V2** (voir `07-security-analysis.md` § 2.1).
 
 ---
 
@@ -397,9 +402,9 @@ Si la KEK est commune à toute la flotte et stockée avec la clé de signature, 
 
 **Gravité** : **G4 CRITIQUE** (ER1, ER11)
 
-**Vraisemblance** : **V2 Vraisemblable** (la clé est une cible de choix ; l'organisation des clés est hors périmètre, mais l'absence de révocation est dans le projet)
+**Vraisemblance** : **V2 Vraisemblable** (la clé est une cible de choix ; l'organisation des clés est hors périmètre, mais la rotation KEK proposée limite l'impact)
 
-**Risque résiduel** : **ÉLEVÉ**
+**Risque résiduel** : **MOYEN** (décision 2.3 : rotation KEK tous les 2-5 ans, bundle de migration)
 
 ---
 
@@ -455,9 +460,9 @@ SR1/SR5/SR8 (réseau, serveur de distribution compromis, ou accès local)
 
 **Gravité** : **G3 GRAVE** (ER6, ER10)
 
-**Vraisemblance** : **V3 Très vraisemblable** (le freeze ne demande qu'un contrôle du transport, et rien ne le détecte)
+**Vraisemblance** : **V2 Vraisemblable** (le downgrade est traité par anti-rollback ; le freeze est maintenant détectable via client compatible cron + horodatage signé, décision 2.2)
 
-**Risque résiduel** : **ÉLEVÉ** (le downgrade est traité, le freeze ne l'est pas)
+**Risque résiduel** : **MOYEN** (le freeze reste possible mais devient visible)
 
 ---
 
@@ -486,9 +491,9 @@ SR1/SR5/SR7
 
 **Gravité** : **G3 GRAVE** (ER3, ER8)
 
-**Vraisemblance** : **V3 Très vraisemblable** (en l'absence d'A/B et de protocole de commit)
+**Vraisemblance** : **V2 Vraisemblable** (A/B + rollback gérés par le script dans le jail, décision 1.6 ; limites cgroups et bornes mémoire spécifiées)
 
-**Risque résiduel** : **ÉLEVÉ**
+**Risque résiduel** : **MOYEN** (coupure accidentelle toujours possible, mais récupération automatique)
 
 ---
 
@@ -624,9 +629,9 @@ SR10 (fabricant ou intégrateur)
 
 **Gravité** : **G4 CRITIQUE** (ER3 — device brické par erreur de gestion)
 
-**Vraisemblance** : **V4 Quasi certain** (inévitable à échelle de production : erreurs humaines, processus dégradés, re-provisionnement sans bundle de migration)
+**Vraisemblance** : **V3 Très vraisemblable** (inévitable à échelle de production : erreurs humaines, processus dégradés, mais mitigé par bundle de migration KEK)
 
-**Risque résiduel** : **ÉLEVÉ**
+**Risque résiduel** : **ÉLEVÉ** (décision 2.3 : bundle de migration proposé)
 
 ---
 
@@ -649,9 +654,14 @@ Limite du modèle : la confidentialité n'est opposable qu'aux attaquants sans d
 
 **Gravité** : **G4 CRITIQUE** (toute la flotte déchiffrée)
 
-**Vraisemblance** : **V3 Très vraisemblable** (si la flotte utilise une KEK unique ou par famille)
+**Vraisemblance** : **V1/V2/V3 selon la portée de la KEK** (décision 1.3 : choix de l'intégrateur)
+- **V1** si KEK **par device** (provisionnement usine, un device compromis n'ouvre que ses bundles)
+- **V2** si KEK **par famille** (un lot de devices du même modèle compromis)
+- **V3** si KEK **unique par flotte** (un seul device ouvre tous les bundles)
 
-**Risque résiduel** : **ÉLEVÉ**
+**Risque résiduel** : **FAIBLE/MOYEN/ÉLEVÉ** selon choix
+
+> **Note** : La portée KEK est **hors scope** du projet (décision 1.3) et relève du choix de l'intégrateur. Le projet fournit les mécanismes (kek_id, bundle de migration, rotation) mais n'impose pas la portée.
 
 ---
 
@@ -678,29 +688,184 @@ SR9 (capture d'un device physique)
 
 **Gravité** : **G3 GRAVE** (déchiffrement de bundles capturés, risque cross-device)
 
-**Vraisemblance** : **V3 Très vraisemblable** (si les bundles capturés avant re-provisionnement circulent encore sur le réseau)
+**Vraisemblance** : **V2 Vraisemblable** (mitigé par bundle de migration KEK + rotation + revocation list)
 
-**Risque résiduel** : **ÉLEVÉ**
+**Risque résiduel** : **MOYEN** (décision 2.3 : bundle de migration proposé)
+
+---
+
+#### SS17 : Bundle offline créé à partir de flash extraite (SR3 → OV1)
+
+**Chemin d'attaque** :
+```
+SR3 (accès physique à la flash hors tension)
+  │
+  ├─▶ Dessoude la puce flash et extrait le firmware installé
+  │
+  ├─▶ Reverse-engine le format de bundle à partir d'un firmware légitime
+  │
+  ├─▶ Crée des bundles personnalisés offline (header + payload chiffré)
+  │   │
+  │   └─▶ Signature ECC invalide (SR3 ne possède pas la clé privée)
+  │
+  └─▶ Installe les bundles créés sur d'autres devices
+      │
+      └─▶ Bundle rejeté sauf si SR3 parvient à obtenir la clé de signature (SO14)
+```
+
+**Gravité** : **G4 CRITIQUE** (si réussi → ER1 : firmware malveillant installé)
+
+**Vraisemblance** : **V3 Très vraisemblable** (si la clé de signature est compromise, V3 → V4 ; sinon V2)
+
+**Risque résiduel** : **ÉLEVÉ** (dépend de R9 : compromission clé signature)
+
+---
+
+#### SS18 : Compromission du serveur de distribution (SR1, SR8 → OV1)
+
+**Chemin d'attaque** :
+```
+SR1/SR8 (accès lecture/écriture sur serveur de distribution)
+  │
+  ├─▶ Remplace un bundle légitime par un bundle modifié
+  │   │
+  │   └─▶ Header signé et wrapped_session_key conservés, payload modifié
+  │
+  ├─▶ Device télécharge le bundle modifié
+  │   │
+  │   └─▶ Vérification signature header réussit (header conservé)
+  │
+  └─▶ Device installe le payload modifié
+      │
+      └─▶ Bundle accepté SAUF si hash du payload complet dans le header
+```
+
+**Gravité** : **G4 CRITIQUE** (ER1 : firmware malveillant installé sur la flotte)
+
+**Vraisemblance** : **V3 Très vraisemblable** (serveur de distribution compromis = tous les bundles modifiables)
+
+**Risque résiduel** : **ÉLEVÉ** (décision 2.6 : hash global du bundle dans le header)
+
+---
+
+#### SS19 : Rejeu offline de bundle avec clé de session extraite (SR1, SR10 → OV2)
+
+**Chemin d'attaque** :
+```
+SR1/SR10 (capture de bundle + obtention clé de session)
+  │
+  ├─▶ Capture un bundle lors d'une mise à jour légitime
+  │
+  ├─▶ Obtient ultérieurement la clé de session du bundle par :
+  │   ├─▶ Forensique mémoire (SO18)
+  │   └─▶ Oracle TPM (SO16a/b)
+  │
+  ├─▶ Dispose de la clé de session + bundle capturé
+  │   │
+  │   └─▶ Peut déchiffrer le payload du bundle capturé
+  │
+  └─▶ Installe le bundle capturé sur un appareil identique (offline)
+      │
+      └─▶ Aucun accès réseau requis au moment de l'installation
+```
+
+**Gravité** : **G3 GRAVE** (déchiffrement de bundles capturés, impact limité à un appareil)
+
+**Vraisemblance** : **V2 Vraisemblable** (barrières multiples : capture + clé session + appareil identique)
+
+**Risque résiduel** : **MOYEN**
+
+---
+
+#### SS20 : Exfiltration via manifeste jail manipulé (SR7 → OV8)
+
+**Chemin d'attaque** :
+```
+SR7 (payload dans le jail)
+  │
+  ├─▶ Fournit un JailManifest structuralement valide
+  │   │
+  │   └─▶ Demande des bind mounts de fichiers sensibles hôte
+  │       (/etc/shadow, clés SSH, certificats TLS)
+  │
+  ├─▶ Supervisor effectue les bind mounts demandés
+  │   │
+  │   └─▶ Validation structurelle mais PAS sémantique
+  │
+  ├─▶ Payload accède aux fichiers sensibles montés
+  │
+  └─▶ Exfiltre le contenu via l'API de sortie contrôlée
+      │
+      └─▶ stdout, fichiers de rapport, ou autre mécanisme de sortie
+```
+
+**Gravité** : **G3 GRAVE** (ER9 : divulgation configuration hôte)
+
+**Vraisemblance** : **V2 Vraisemblable** (accessible à un attaquant de niveau moyen)
+
+**Risque résiduel** : **MOYEN** (policy machine + whitelist chemins)
+
+---
+
+#### SS21 : Contournement des protections physiques du TPM (SR3, SR4 → OV6)
+
+**Chemin d'attaque** :
+```
+SR3/SR4 (accès physique avancé + compétences hardware)
+  │
+  ├─▶ Contourne les mécanismes de protection physique du TPM
+  │   ├─▶ Neutralise les commutateurs anti-tamper avant l'accès
+  │   └─▶ Bypass le mastic détectable
+  │
+  ├─▶ Accède directement aux broches du TPM (SPI/I2C)
+  │
+  ├─▶ Tente d'extraire la KEK par moyens matériels :
+  │   ├─▶ Side-channel sur l'alimentation
+  │   ├─▶ Injection de fautes (glitches voltage/horloge)
+  │   └─▶ Extraction physique de la puce + analyse microscope (FAI)
+  │
+  └─▶ Obtient la KEK et déchiffre les bundles de la flotte
+```
+
+**Gravité** : **G4 CRITIQUE** (ER7 : KEK compromise, tous les bundles déchiffrables)
+
+**Vraisemblance** : **V1 Peu vraisemblable** (équipement et compétences très élevés, accessible uniquement à des acteurs étatiques de haut niveau)
+
+**Risque résiduel** : **FAIBLE** (accepté au titre des hypothèses matérielles, 1.6)
 
 ---
 
 ### 3.3 Synthèse des scénarios stratégiques
 
-| Scénario | Gravité | Vraisemblance | Risque résiduel | Priorité |
-|---|---|---|---|---|
-| SS1 (réseau) | G4 | V1 | FAIBLE | 🟢 Basse |
-| SS2 (physique flash) | G4 | V2 | MOYEN | 🟠 Moyenne |
-| SS3 (local root) | G4 | V3 | ÉLEVÉ | 🔴 Haute |
-| SS4 (évasion jail) | G4 | V2 | MOYEN | 🟠 Moyenne |
-| SS5 (bus TPM) | G4 | V1 | FAIBLE | 🟢 Basse |
-| SS6 (clé de signature éditeur) | G4 | V2 | ÉLEVÉ | 🔴 Haute |
-| SS7 (supply chain) | G4 | V2 | ÉLEVÉ | 🔴 Haute |
-| SS8 (downgrade / freeze) | G3 | V3 | ÉLEVÉ | 🔴 Haute |
-| SS9 (DoS / brick) | G3 | V3 | ÉLEVÉ | 🔴 Haute |
-| SS10 (exfiltration par le payload) | G3 | V2 | MOYEN | 🟠 Moyenne |
-| SS11 (reset TPM, rejeu PCR) | G3 | V2 | MOYEN | 🟠 Moyenne |
-| SS12 (injection de fautes) | G4 | V1 | FAIBLE | 🟢 Basse |
-| SS13 (propriétaire du device) | G3 | V4 | ÉLEVÉ | 🟠 Moyenne (arbitrage) |
+| Scénario | Gravité | Vraisemblance | Risque résiduel | Priorité | Dépendance prérequis |
+|---|---|---|---|---|---|
+| SS1 (réseau) | G4 | V1 | FAIBLE | 🟢 Basse | — |
+| SS2 (physique flash) | G4 | V1* / V2** | FAIBLE* / MOYEN** | 🟢 Basse* / 🟠 Moyenne** | ✅ Chaîne de boot |
+| SS3 (local root) | G4 | V3 / V2*** | ÉLEVÉ / MOYEN*** | 🔴 Haute | — |
+| SS4 (évasion jail) | G4 | V2 | MOYEN | 🟠 Moyenne | — |
+| SS5 (bus TPM) | G4 | V1 | FAIBLE | 🟢 Basse | — |
+| SS6 (clé de signature éditeur) | G4 | V2 / V1**** | ÉLEVÉ / MOYEN**** | 🔴 Haute / 🟠 Moyenne**** | — |
+| SS7 (supply chain) | G4 | V2 | ÉLEVÉ | 🔴 Haute | — |
+| SS8 (downgrade / freeze) | G3 | V2 | MOYEN | 🟠 Moyenne | — |
+| SS9 (DoS / brick) | G3 | V2 | MOYEN | 🟠 Moyenne | — |
+| SS10 (exfiltration par le payload) | G3 | V2 | MOYEN | 🟠 Moyenne | — |
+| SS11 (reset TPM, rejeu PCR) | G3 | V2 | MOYEN | 🟠 Moyenne | — |
+| SS12 (injection de fautes) | G4 | V1 | FAIBLE | 🟢 Basse | — |
+| SS13 (propriétaire du device) | G3 | V4 | ÉLEVÉ | 🟠 Moyenne (arbitrage) | — |
+| SS14 (erreur provisionnement) | G4 | V3 | ÉLEVÉ | 🔴 Haute | — |
+| SS15 (compromission flotte-wide) | G4 | V1/V2/V3***** | FAIBLE/MOYEN/ÉLEVÉ***** | 🟢/🟠/🔴***** | ✅ Portée KEK |
+| SS16 (re-provisionnement) | G3 | V2 | MOYEN | 🟠 Moyenne | — |
+| SS17 (bundle offline flash) | G4 | V3 | ÉLEVÉ | 🔴 Haute | — |
+| SS18 (serveur distribution) | G4 | V3 | ÉLEVÉ | 🔴 Haute | — |
+| SS19 (rejeu offline + clé session) | G3 | V2 | MOYEN | 🟠 Moyenne | — |
+| SS20 (exfiltration via manifeste) | G3 | V2 | MOYEN | 🟠 Moyenne | — |
+| SS21 (contournement protections TPM) | G4 | V1 | FAIBLE | 🟢 Basse | — |
+
+\* : **V1 si prérequis respecté** (chaîne de boot complète, voir `prerequis-integration.md` § 3)
+\*\* : **V2 si prérequis NON respecté** (chaîne de boot incomplète)
+\*\*\* : **V2 avec défenses en profondeur** (hidepid=2, seccomp supervisor, cgroups), **V3 sans**
+\*\*\*\* : **V1 si rotation KEK effective** (décision 2.3), **V2 sans**
+\*\*\*\*\* : **V1 si KEK par device**, **V2 si KEK par famille**, **V3 si KEK unique par flotte** (choix de l'intégrateur, décision 1.3)
 
 ---
 
@@ -1220,7 +1385,7 @@ SR9 (capture d'un device physique)
 
 ---
 
-#### SO21 — Extraction physique de la flash + création de bundle offline (SR3 → BS1) — SS19
+#### SO21 — Extraction physique de la flash + création de bundle offline (SR3 → BS1) — SS17
 
 **Enchaînement d'actions** :
 
@@ -1251,7 +1416,7 @@ SR9 (capture d'un device physique)
 
 ---
 
-#### SO22 — Compromission du serveur de distribution (SR1 + SR8 → BS1) — SS20
+#### SO22 — Compromission du serveur de distribution (SR1 + SR8 → BS1) — SS18
 
 **Enchaînement d'actions** :
 
@@ -1283,7 +1448,7 @@ SR9 (capture d'un device physique)
 
 ---
 
-#### SO23 — Rejeu de bundle offline avec clé de session extraite (SR1 + SR10 → BS1, BS4) — SS21
+#### SO23 — Rejeu de bundle offline avec clé de session extraite (SR1 + SR10 → BS1, BS4) — SS19
 
 **Enchaînement d'actions** :
 
@@ -1317,7 +1482,7 @@ SR9 (capture d'un device physique)
 
 ---
 
-#### SO24 — Manipulation du manifeste jail pour exfiltration de données hôte (SR10 + SR11 → BS5) — SS22
+#### SO24 — Manipulation du manifeste jail pour exfiltration de données hôte (SR10 + SR11 → BS5) — SS20
 
 **Enchaînement d'actions** :
 
@@ -1349,7 +1514,7 @@ SR9 (capture d'un device physique)
 
 ---
 
-#### SO25 — Contournement des protections physiques du TPM (SR3 + SR4 → BS3) — SS23
+#### SO25 — Contournement des protections physiques du TPM (SR3 + SR4 → BS3) — SS21
 
 **Enchaînement d'actions** :
 
@@ -1428,31 +1593,70 @@ SR9 (capture d'un device physique)
 |---|---|---|---|---|
 | R1 : Compromission supervisor via parser bug | G4 | V2 | **ÉLEVÉ** | ❌ Inacceptable |
 | R2 : Extraction clé de session via /proc | G3 | V3 | **ÉLEVÉ** | ❌ Inacceptable |
-| R3 : Attaque physique flash (sans chaîne de boot) | G4 | V2 | **MOYEN** | ⚠️ Tolérable (sous conditions) |
+| R3 : Attaque physique flash (sans chaîne de boot) | G4 | V1*/V2** | **FAIBLE*/MOYEN** | ✅ Acceptable* / ⚠️ Tolérable** |
 | R4 : Évasion du jail | G4 | V2 | **MOYEN** | ⚠️ Tolérable (sous conditions) |
 | R5 : Réinitialisation TPM | G3 | V2 | **MOYEN** | ⚠️ Tolérable (sous conditions) |
 | R6 : Attaque réseau | G4 | V1 | **FAIBLE** | ✅ Acceptable |
 | R7 : Abaissement anti-rollback (fichier) | G3 | V1 | **FAIBLE** | ✅ Acceptable |
 | R8a : Oracle TPM par root (une tentative par reboot) | G3 | V3 | **ÉLEVÉ** | ❌ Inacceptable |
 | R8b : Oracle TPM répété (boucle, reboot physique) | G3 | V2 | **MOYEN** | ⚠️ Tolérable (sous conditions) |
-| R9 : Compromission de la clé de signature éditeur (SS6, SO14) | G4 | V2 | **ÉLEVÉ** | ❌ Inacceptable |
+| R9 : Compromission de la clé de signature éditeur (SS6, SO14) | G4 | V2/V1*** | **ÉLEVÉ/MOYEN***** | ❌ Inacceptable / ⚠️ Tolérable*** |
 | R10 : Compromission de la chaîne d'approvisionnement logicielle (SS7, SO13) | G4 | V2 | **ÉLEVÉ** | ❌ Inacceptable |
-| R11 : Freeze et maintien sur version vulnérable (SS8, SO7) | G3 | V3 | **ÉLEVÉ** | ❌ Inacceptable |
-| R12 : Déni de service et brick (SS9, SO8 à SO11) | G3 | V3 | **ÉLEVÉ** | ❌ Inacceptable |
+| R11 : Freeze et maintien sur version vulnérable (SS8, SO7) | G3 | V2 | **MOYEN** | ⚠️ Tolérable (sous conditions) |
+| R12 : Déni de service et brick (SS9, SO8 à SO11) | G3 | V2 | **MOYEN** | ⚠️ Tolérable (sous conditions) |
 | R13 : Exfiltration ou falsification via le payload (SS10, SO12) | G3 | V2 | **MOYEN** | ⚠️ Tolérable (sous conditions) |
 | R14 : Reset du TPM et rejeu de PCR (SS11, SO6) | G3 | V2 | **MOYEN** | ⚠️ Tolérable (sous conditions) |
 | R15 : Injection de fautes sur le SoC (SS12) | G4 | V1 | **FAIBLE** | ✅ Acceptable (hypothèses matérielles) |
 | R16 : Divulgation par le propriétaire du device, TPM comme oracle (SS13, SO16a/SO16b) | G3 | V4 | **ÉLEVÉ** | ⚠️ À arbitrer (acceptation ou réduction) |
-| R17 : Erreur de provisionnement — KEK incorrecte (SS14, SO17) | G4 | V4 | **CRITIQUE** | ❌ Inacceptable |
-| R18 : Compromission flotte-wide par KEK unique (SS15, SO19) | G4 | V3 | **ÉLEVÉ** | ❌ Inacceptable |
-| R19 : Re-provisionnement d'un device capturé (SS16, SO20) | G3 | V3 | **ÉLEVÉ** | ❌ Inacceptable |
-| R20 : Bundle offline créé à partir de flash extraite (SS19, SO21) | G4 | V3 | **ÉLEVÉ** | ❌ Inacceptable |
-| R21 : Substitution de payload par serveur de distribution compromis (SS20, SO22) | G4 | V3 | **ÉLEVÉ** | ❌ Inacceptable |
-| R22 : Rejeu offline de bundle avec clé de session extraite (SS21, SO23) | G3 | V2 | **MOYEN** | ⚠️ Tolérable (sous conditions) |
-| R23 : Exfiltration de données hôte via manifeste jail (SS22, SO24) | G3 | V2 | **MOYEN** | ⚠️ Tolérable (sous conditions) |
-| R24 : Contournement des protections physiques du TPM (SS23, SO25) | G3 | V1 | **FAIBLE** | ✅ Acceptable (hypothèses matérielles) |
+| R17 : Erreur de provisionnement — KEK incorrecte (SS14, SO17) | G4 | V3 | **ÉLEVÉ** | ❌ Inacceptable |
+| R18 : Compromission flotte-wide par KEK unique (SS15, SO19) | G4 | V1/V2/V3**** | **FAIBLE/MOYEN/ÉLEVÉ****** | ✅/⚠️/❌**** |
+| R19 : Re-provisionnement d'un device capturé (SS16, SO20) | G3 | V2 | **MOYEN** | ⚠️ Tolérable (sous conditions) |
+| R20 : Bundle offline créé à partir de flash extraite (SS17, SO21) | G4 | V3 | **ÉLEVÉ** | ❌ Inacceptable |
+| R21 : Substitution de payload par serveur de distribution compromis (SS18, SO22) | G4 | V3 | **ÉLEVÉ** | ❌ Inacceptable |
+| R22 : Rejeu offline de bundle avec clé de session extraite (SS19, SO23) | G3 | V2 | **MOYEN** | ⚠️ Tolérable (sous conditions) |
+| R23 : Exfiltration de données hôte via manifeste jail (SS20, SO24) | G3 | V2 | **MOYEN** | ⚠️ Tolérable (sous conditions) |
+| R24 : Contournement des protections physiques du TPM (SS21, SO25) | G3 | V1 | **FAIBLE** | ✅ Acceptable (hypothèses matérielles) |
 
-### 5.2 Stratégie de traitement
+\* : **V1 si prérequis chaîne de boot respecté** (`prerequis-integration.md` § 3) → risque FAIBLE
+\*\* : **V2 si prérequis NON respecté** → risque MOYEN
+\*\*\* : **V1 si rotation KEK effective** (décision 2.3) → risque MOYEN ; **V2 sans** → risque ÉLEVÉ
+\*\*\*\* : **V1 si KEK par device**, **V2 si KEK par famille**, **V3 si KEK unique** (choix de l'intégrateur, décision 1.3)
+
+### 5.2bis Tableau croisé SS ↔ SO (traçabilité)
+
+Ce tableau permet de tracer chaque scénario stratégique vers les scénarios opérationnels qui le réalisent, et inversement.
+
+| SS | SO associés | Gravité | V | Risque |
+|---|---|---|---|---|
+| **SS1** (réseau) | SO15 | G4 | V1 | FAIBLE |
+| **SS2** (physique flash) | SO4, SO5 | G4 | V1*/V2** | FAIBLE*/MOYEN** |
+| **SS3** (local root) | SO1, SO3 | G4 | V3/V2*** | ÉLEVÉ/MOYEN*** |
+| **SS4** (évasion jail) | SO2 | G4 | V2 | MOYEN |
+| **SS5** (bus TPM) | — (mitigé par sessions chiffrées) | G4 | V1 | FAIBLE |
+| **SS6** (clé signature) | SO14 | G4 | V2/V1**** | ÉLEVÉ/MOYEN**** |
+| **SS7** (supply chain) | SO13 | G4 | V2 | ÉLEVÉ |
+| **SS8** (downgrade/freeze) | SO7 | G3 | V2 | MOYEN |
+| **SS9** (DoS/brick) | SO8, SO9, SO10, SO11 | G3 | V2 | MOYEN |
+| **SS10** (exfiltration payload) | SO12 | G3 | V2 | MOYEN |
+| **SS11** (reset TPM, rejeu PCR) | SO6 | G3 | V2 | MOYEN |
+| **SS12** (injection fautes) | — (hypothèses matérielles) | G4 | V1 | FAIBLE |
+| **SS13** (propriétaire device) | SO16a, SO16b | G3 | V4 | ÉLEVÉ |
+| **SS14** (erreur provisionnement) | SO17 | G4 | V3 | ÉLEVÉ |
+| **SS15** (compromission flotte-wide) | SO19 | G4 | V1/V2/V3***** | FAIBLE/MOYEN/ÉLEVÉ***** |
+| **SS16** (re-provisionnement) | SO20 | G3 | V2 | MOYEN |
+| **SS17** (bundle offline flash) | SO21 | G4 | V3 | ÉLEVÉ |
+| **SS18** (serveur distribution) | SO22 | G4 | V3 | ÉLEVÉ |
+| **SS19** (rejeu offline + clé session) | SO23 | G3 | V2 | MOYEN |
+| **SS20** (exfiltration manifeste) | SO24 | G3 | V2 | MOYEN |
+| **SS21** (contournement protections TPM) | SO25 | G4 | V1 | FAIBLE |
+
+\* : V1 si prérequis chaîne de boot respecté
+\*\* : V2 si prérequis NON respecté
+\*\*\* : V2 avec défenses en profondeur, V3 sans
+\*\*\*\* : V1 si rotation KEK effective, V2 sans
+\*\*\*\*\* : V1 si KEK par device, V2 si KEK par famille, V3 si KEK unique
+
+### 5.3 Stratégie de traitement
 
 #### R1 : Compromission supervisor via parser bug (ÉLEVÉ → FAIBLE)
 
@@ -1813,7 +2017,7 @@ SR9 (capture d'un device physique)
 
 ---
 
-### 5.3 Plan d'amélioration continue
+### 5.4 Plan d'amélioration continue
 
 #### Priorité 1 : Critique (avant implémentation)
 
@@ -1880,7 +2084,7 @@ SR9 (capture d'un device physique)
 | Audit de sécurité matérielle (protections physiques TPM, verrou de flash) | QA, matériel | T+24 semaines | 🔲 À faire |
 | Tests de contournement des protections physiques (mastic, commutateurs) | QA, matériel | T+24 semaines | 🔲 À faire |
 
-### 5.4 Cadre de suivi des risques
+### 5.5 Cadre de suivi des risques
 
 #### Indicateurs de risque
 
