@@ -599,6 +599,85 @@ Limite du modèle : la confidentialité est opposable aux attaquants sans device
 
 ---
 
+#### SS14 : Erreur de provisionnement — KEK incorrecte chargée (SR10 → OV7)
+
+**Chemin d'attaque** :
+```
+SR10 (fabricant ou intégrateur)
+  │
+  ├─▶ Charge une KEK incorrecte dans le TPM de N devices
+  │   │
+  │   └─▶ Les bundles signés par l'éditeur ne correspondent à aucune KEK de ces devices
+  │
+  ├─▶ Ou : re-provisionne un device en campo avec une nouvelle KEK sans bundle de migration
+  │   │
+  │   └─▶ Le device devient intrinsèquement inamisable (aucun futur bundle ne contient le nouveau kek_id)
+  │
+  └─▶ Résultat : device ou lot de devices incapables de recevoir DES mises à jour
+```
+
+**Gravité** : **G4 CRITIQUE** (ER3 — device brické par erreur de gestion)
+
+**Vraisemblance** : **V4 Quasi certain** (inévitable à échelle de production : erreurs humaines, processus dégradés, re-provisionnement sans bundle de migration)
+
+**Risque résiduel** : **ÉLEVÉ**
+
+---
+
+#### SS15 : Compromission flotte-wide par KEK unique (SR8, SR9 → OV2)
+
+**Chemin d'attaque** :
+```
+SR8 ou SR9 (compromission d'un device ou du poste de build)
+  │
+  ├─▶ Extrait la KEK d'un device (SO16, SO18, ou reverse-engineering)
+  │
+  └─▶ Si la flotte utilise une KEK unique ou par famille :
+      │
+      ├─▶ Récupère N bundles de la flotte (stockés sur le serveur ou capturés)
+      │
+      └─▶ Déchiffre L'INTÉGRALITÉ des bundles de la flotte qui partagent cette KEK
+```
+
+Limite du modèle : la confidentialité n'est opposable qu'aux attaquants sans device légitime. Avec une KEK unique par flotte, un seul device ouvre tous les bundles de la flotte. Avec une KEK par famille, un lot de devices du même modèle.
+
+**Gravité** : **G4 CRITIQUE** (toute la flotte déchiffrée)
+
+**Vraisemblance** : **V3 Très vraisemblable** (si la flotte utilise une KEK unique ou par famille)
+
+**Risque résiduel** : **ÉLEVÉ**
+
+---
+
+#### SS16 : Re-provisionnement d'un device capturé (SR9 → OV2)
+
+**Chemin d'attaque** :
+```
+SR9 (capture d'un device physique)
+  │
+  ├─▶ Extrait la KEK du device capturé (SO16 ou SO18)
+  │
+  ├─▶ Le device est re-provisionné (changement de politique, migration de flotte, remplacement hardware)
+  │   │
+  │   └─▶ Une nouvelle KEK est chargée ; l'ancienne est rendue inopérante (ou présente dans un pool)
+  │
+  ├─▶ SR9 utilise l'ancienne KEK pour déchiffrer des bundles capturés (ancien kek_id)
+  │   │
+  │   └─▶ Si le device re-provisionné contient l'ancienne KEK (pool), SR9 peut installer
+  │       rétroactivement d'anciens bundles capturés
+  │
+  └─▶ Ou : SR9 installe un bundle capturé (ancien kek_id) sur un device B qui partage
+      l'ancienne KEK de A (cross-device)
+```
+
+**Gravité** : **G3 GRAVE** (déchiffrement de bundles capturés, risque cross-device)
+
+**Vraisemblance** : **V3 Très vraisemblable** (si les bundles capturés avant re-provisionnement circulent encore sur le réseau)
+
+**Risque résiduel** : **ÉLEVÉ**
+
+---
+
 ### 3.3 Synthèse des scénarios stratégiques
 
 | Scénario | Gravité | Vraisemblance | Risque résiduel | Priorité |
@@ -1004,6 +1083,111 @@ Limite du modèle : la confidentialité est opposable aux attaquants sans device
 
 ---
 
+#### SO17 : Malfaision de provisionnement (mauvaise KEK chargée) (SR10 → BS3, BS1) — SS7
+
+**Enchaînement d'actions** :
+1. **SR10** (fabricant ou intégrateur) charge une KEK incorrecte dans le TPM de certains devices lors du provisioning en usine
+2. Les bundles produits par l'éditeur ne peuvent pas être déchiffrés par ces devices (aucun `kek_id` ne correspond)
+3. **BS1** (updated) échoue sur le déchiffrement de la clé de session : `KEK_NOT_FOUND` ou `POLICY_FAIL`
+4. **Device définitivement incapable de recevoir des mises à jour**
+
+**Variantes** :
+- **Provisionnement partiel** : seuls certains devices d'une même campagne ont la mauvaise KEK ; l'éditeur ne peut pas savoir quelle KEK charger (plusieurs `kek_id` dans différents bundles, aucun ne correspond).
+- **Provisionnement révisé** : un device est re-provisionné en campo avec une nouvelle KEK sans que les bundles suivants n'intègrent le nouveau `kek_id` ; le device devient intrinsèquement inamisable.
+
+**Mitigations existantes** :
+- Vérification post-provisionnement (`TPM2_ReadLock` + vérification que `KEK_id` match `header.kek_id`)
+- Journal de provisioning côté éditeur (corrélation `kek_id` → `device_serial`)
+
+**Mitigations manquantes** :
+- Processus de vérification de provisioning : lot de test avec bundle signed, vérification qu'aucun device ne rejette
+- Mécanisme de migration de KEK : un bundle « de migration » signe le nouveau `kek_id` et le charge dans le TPM (nécessite une cérémonie de clés)
+- Détection en campo : un device qui rejette N bundles consécutifs peut demander au serveur quelle KEK il attend ; le serveur répond avec le bon `kek_id` (et un bundle de migration signé)
+- Gestion d'un pool de KEK : un device peut contenir plusieurs KEK ; un bundle spécifie le `kek_id` cible parmi celles présentes
+
+**Vraisemblance** : **V4 Quasi certain** (inévitable à échelle de production : erreurs humaines, processus dégradés, re-provisionnement sans mise à jour du bundle de migration)
+
+**Gravité** : **G4 CRITIQUE** (un device ou lot de devices définitivement inutilisable, pas de mise à jour possible)
+
+---
+
+#### SO18 : Extraction de clé de session par forensique mémoire post-crash (SR3 → BS4)
+
+**Enchaînement d'actions** :
+1. **SR3** provoque un panic kernel (ou coupure d'alimentation) pendant que `updated` détient la clé de session en RAM
+2. **SR3** extrait la RAM (bus DMA, lecture directe, ou image de sommeil/hybernation)
+3. **SR3** recherche la clé de session en clair (signature brute-force sur les hashes de signature valides, ou pattern de clé AES-256)
+4. **SR3** utilise la clé de session pour déchiffrer les chunks du bundle en cours d'installation
+
+**Mitigations existantes** :
+- `mlockall(MCL_CURRENT | MCL_FUTURE)` empêche le swap sur disque
+- `madvise(MADV_DONTDUMP)` empêche les core dumps et images de sommeil
+- `prctl(PR_SET_DUMPABLE, 0)` empêche les core dumps
+
+**Mitigations manquantes** :
+- Zeroize de la clé de session dans le signal panic (panic handler qui call `memset_s` sur la clé de session)
+- Chiffrement de la RAM en repos (memory encryption, Intel TXT / ARM SME / AMU)
+- Clear-on-drop de la clé de session (zeroize dans le destructeur `Drop` Rust)
+- Vérification que les pages de la clé de session ne sont pas mappées dans le swap (même si `mlock` est posé)
+
+**Vraisemblance** : **V3 Très vraisemblable** (si le panic ne zeroise pas explicitement la clé, et si la RAM n'est pas chiffrée — option matérielle non garantie sur tous les SoC ARMv7)
+
+**Gravité** : **G3 GRAVE** (déchiffrement d'un bundle spécifique en cours d'installation)
+
+---
+
+#### SO19 : Compromission flotte-wide par KEK unique (SR9, SR8 → BS3, BS4, BS9) — SS6
+
+**Enchaînement d'actions** :
+1. **SR8** (ou **SR9**) compromet l'extraction d'une KEK d'un device (via SO16 ou SO18, ou par reverse-engineering du firmware)
+2. La flotte utilise une **KEK unique** (ou une poignée de KEK par famille) — question 6 de `00`, question 6 de `03`
+3. **SR8/SR9** récupère N bundles de la flotte (stockés sur le serveur de distribution, ou capturés par SR1)
+4. **SR8/SR9** déchiffre **l'intégralité des bundles de la flotte** qui partagent cette KEK
+
+**Mitigations existantes** :
+- Clé de session unique par bundle : l'extraction d'une session key n'expose qu'un bundle
+- Sessions chiffrées TPM (protègent contre le bus, pas contre root)
+
+**Mitigations manquantes** :
+- KEK **par device** (unique à chaque device, provisionnée en usine) : compromettre un device ne compromet que ce device
+- Ou : KEK **par famille** (une KEK par modèle de device, pas par flotte) : compromettre un lot n'ouvre qu'un modèle
+- Mécanisme de migration de KEK : un bundle « de migration » permet de charger une nouvelle KEK dans le TPM sans casser les bundles existants
+- Rotation de KEK : cérémonie de clés pour passer d'une ancienne KEK à une nouvelle sans interrompre les devices en campo
+
+**Vraisemblance** : **V3 Très vraisemblable** (si la flotte utilise une KEK unique ou par famille, ce qui est le cas par défaut si aucune politique contraire n'est appliquée)
+
+**Gravité** : **G4 CRITIQUE** (toute la flotte déchiffrée, pas seulement un device)
+
+---
+
+#### SO20 : Re-provisionnement d'un device capturé (SR9 → BS3, BS4, BS1) — SS13
+
+**Enchaînement d'actions** :
+1. **SR9** capture un device physique (ou en obtient un identique) et en extrait la KEK (SO16 ou SO18)
+2. **SR9** fait re-provisionner le device (ou un device identique) avec une **nouvelle KEK** (changement de politique, migration de flotte, ou remplacement hardware)
+3. **SR9** utilise la **ancienne KEK** extraite pour déchiffrer des bundles signés avec l'ancien `kek_id`
+4. **SR9** parvient à installer des bundles « rétroactifs » sur le device re-provisionné : le nouveau `kek_id` est dans le bundle, mais **l'ancien bundle** (capturé avant re-provisionnement) utilise l'ancien `kek_id`
+
+**Variantes** :
+- **Bundle capture post-re-provisionnement** : le device re-provisionné reçoit un bundle signé avec son nouveau `kek_id`. **SR9** a capturé l'ancien bundle (avec l'ancien `kek_id`) et tente de l'installer : le rejet est attendu. Mais si le device contient **les deux KEK** (pool de KEK), **SR9** utilise l'ancienne KEK pour déchiffrer l'ancien bundle.
+- **Bundle cross-device** : **SR9** capture un bundle d'un device A, le device A est re-provisionné, et **SR9** tente d'installer le bundle capturé sur un device B qui partage l'ancienne KEK de A.
+
+**Mitigations existantes** :
+- `kek_id` dans le header : le device rejette les bundles dont le `kek_id` ne correspond pas à une KEK provisionnée
+- Clé de session unique par bundle : l'extraction d'une session key n'expose qu'un bundle
+
+**Mitigations manquantes** :
+- Politique de **validité temporelle des KEK** : une KEK périmée ne doit plus pouvoir déchiffrer de nouveaux bundles (mais peut-elle déchiffrer d'anciens bundles ?)
+- **Bundle de migration** : un bundle « de migration » signe le nouveau `kek_id` et le charge dans le TPM ; les anciens bundles restent valables mais ne peuvent plus être installés après migration
+- **Politique de rotation** : une politique de rotation de KEK (tous les N bundles ou M années) réduit la fenêtre d'exposition d'une KEK compromise
+- **Revocation list** : une liste de KEK révoquées stockée dans le TPM ; un bundle dont le `kek_id` est dans la liste est rejeté
+
+**Vraisemblance** : **V3 Très vraisemblable** (si un dispositif est capturé, re-provisionné, et que les bundles capturés avant re-provisionnement circulent encore sur le réseau)
+
+**Gravité** : **G3 GRAVE** (déchiffrement de bundles capturés, risque cross-device)
+
+---
+
 ### 4.3 Synthèse des scénarios opérationnels
 
 | Scénario | BS concernés | Vraisemblance | Gravité | Risque | Priorité |
@@ -1024,6 +1208,10 @@ Limite du modèle : la confidentialité est opposable aux attaquants sans device
 | SO14 (vol de la clé de signature) | BS9 | V2 | G4 | ÉLEVÉ | 🔴 Haute |
 | SO15 (chunks réordonnés ou mélangés) | BS1, BS2 | V1 | G4 | FAIBLE | 🟢 Basse |
 | SO16 (TPM comme oracle) | BS3, BS4 | V4 | G3 | ÉLEVÉ | 🟠 Moyenne (arbitrage) |
+| SO17 (malfaision de provisionnement) | BS3, BS1 | V4 | G4 | ÉLEVÉ | 🔴 Haute |
+| SO18 (forensique mémoire post-crash) | BS4 | V3 | G3 | ÉLEVÉ | 🔴 Haute |
+| SO19 (compromission flotte-wide) | BS3, BS4, BS9 | V3 | G4 | ÉLEVÉ | 🔴 Haute |
+| SO20 (re-provisionnement device capturé) | BS3, BS4, BS1 | V3 | G3 | ÉLEVÉ | 🔴 Haute |
 
 ---
 
@@ -1049,6 +1237,9 @@ Limite du modèle : la confidentialité est opposable aux attaquants sans device
 | R14 : Reset du TPM et rejeu de PCR (SS11, SO6) | G3 | V2 | **MOYEN** | ⚠️ Tolérable (sous conditions) |
 | R15 : Injection de fautes sur le SoC (SS12) | G4 | V1 | **FAIBLE** | ✅ Acceptable (hypothèses matérielles) |
 | R16 : Divulgation par le propriétaire du device, TPM comme oracle (SS13, SO16) | G3 | V4 | **ÉLEVÉ** | ⚠️ À arbitrer (acceptation ou réduction) |
+| R17 : Erreur de provisionnement — KEK incorrecte (SS14, SO17) | G4 | V4 | **CRITIQUE** | ❌ Inacceptable |
+| R18 : Compromission flotte-wide par KEK unique (SS15, SO19) | G4 | V3 | **ÉLEVÉ** | ❌ Inacceptable |
+| R19 : Re-provisionnement d'un device capturé (SS16, SO20) | G3 | V3 | **ÉLEVÉ** | ❌ Inacceptable |
 
 ### 5.2 Stratégie de traitement
 
@@ -1254,6 +1445,58 @@ Limite du modèle : la confidentialité est opposable aux attaquants sans device
 
   Risque résiduel : **MOYEN** (un device ouvre encore les bundles qu'il installe)
 
+**Note** : ce risque croise R18 (compromission flotte-wide) et R19 (re-provisionnement). Une KEK par device (R18) réduit la surface d'exposition d'un device unique. Une politique de rotation de KEK (R19) réduit la fenêtre d'exposition rétroactive.
+
+---
+
+#### R17 : Erreur de provisionnement — KEK incorrecte (CRITIQUE)
+
+**Stratégie** : **Réduction** (prévention par conception + détection)
+
+**Mesures** :
+1. ✅ **Vérification post-provisionnement** (déjà prévue) : `TPM2_ReadLock` + vérification que `KEK_id` match `header.kek_id`
+2. 🔲 **Bundle de migration** : un bundle signé « de migration » charge un nouveau `kek_id` dans le TPM sans casser les bundles existants
+3. 🔲 **Pool de KEK** : un device contient plusieurs KEK ; un bundle spécifie le `kek_id` cible parmi celles présentes
+4. 🔲 **Processus de vérification de provisioning** : lot de test avec bundle signé, vérification qu'aucun device ne rejette
+5. 🔲 **Détection en campo** : un device qui rejette N bundles consécutifs demande au serveur quelle KEK il attend
+6. 🔲 **Cérémonie de clés** : procédure formelle pour ajouter une KEK à un device déjà en campo
+7. 🔲 **Interdiction du re-provisionnement sans bundle de migration** : politique organisationnelle
+
+**Risque résiduel après traitement** : **MOYEN** (erreur humaine résiduelle si politique de migration violée)
+
+---
+
+#### R18 : Compromission flotte-wide par KEK unique (ÉLEVÉ)
+
+**Stratégie** : **Réduction** (limitation de l'impact par segmentation)
+
+**Mesures** :
+1. ✅ **Clé de session unique par bundle** (déjà spécifiée) : l'extraction d'une session key n'expose qu'un bundle
+2. 🔲 **KEK par device** (unique à chaque device, provisionnée en usine) : compromettre un device ne compromet que ce device
+3. 🔲 **Ou : KEK par famille** (une KEK par modèle de device, pas par flotte) : compromettre un lot n'ouvre qu'un modèle
+4. 🔲 **Mécanisme de migration de KEK** : un bundle « de migration » permet de charger une nouvelle KEK sans casser les bundles existants
+5. 🔲 **Rotation de KEK** : cérémonie de clés pour passer d'une ancienne KEK à une nouvelle sans interrompre les devices en campo
+6. 🔲 **Liste de validité temporelle** : une KEK périmée ne peut plus déchiffrer de nouveaux bundles
+
+**Risque résiduel après traitement** : **MOYEN** (un device ne compromet plus que ce device, mais un lot de même modèle peut rester exposé)
+
+---
+
+#### R19 : Re-provisionnement d'un device capturé (ÉLEVÉ)
+
+**Stratégie** : **Réduction** (limitation de la fenêtre d'exposition rétroactive)
+
+**Mesures** :
+1. ✅ **`kek_id` dans le header** (déjà spécifié) : le device rejette les bundles dont le `kek_id` ne correspond pas
+2. ✅ **Clé de session unique par bundle** (déjà spécifiée) : l'extraction d'une session key n'expose qu'un bundle
+3. 🔲 **Politique de validité temporelle des KEK** : une KEK périmée ne peut plus déchiffrer de nouveaux bundles (mais peut-elle déchiffrer d'anciens ?)
+4. 🔲 **Bundle de migration** : un bundle « de migration » signe le nouveau `kek_id` et le charge dans le TPM ; les anciens bundles restent valables mais ne peuvent plus être installés après migration
+5. 🔲 **Politique de rotation** : une politique de rotation de KEK (tous les N bundles ou M années) réduit la fenêtre d'exposition d'une KEK compromise
+6. 🔲 **Revocation list** : une liste de KEK révoquées stockée dans le TPM ; un bundle dont le `kek_id` est dans la liste est rejeté
+7. 🔲 **Interdiction du re-provisionnement sans cérémonie de clés** : politique organisationnelle
+
+**Risque résiduel après traitement** : **MOYEN** (un device re-provisionné ne peut plus utiliser d'anciens bundles capturés, mais la compromission d'un device non re-provisionné reste possible)
+
 ---
 
 ### 5.3 Plan d'amélioration continue
@@ -1272,6 +1515,8 @@ Limite du modèle : la confidentialité est opposable aux attaquants sans device
 | Spécifier la fraîcheur des mises à jour (horodatage ou expiration signés) | Architecte | T+2 semaines | 🔲 À faire |
 | Intégrer l'A/B et le protocole de commit atomique à `04-update-flow.md` | Architecte | T+2 semaines | 🔲 À faire |
 | Rendre `PolicyPCR` obligatoire et relier le reset du TPM au reset du SoC | Architecte, matériel | T+2 semaines | 🔲 À faire |
+| Spécifier le bundle de migration (police de KEK, procédure de re-provisionnement) | Architecte | T+4 semaines | 🔲 À faire |
+| Spécifier la politique de rotation de KEK et revocation list | Architecte | T+4 semaines | 🔲 À faire |
 
 #### Priorité 2 : Haute (pendant implémentation)
 
@@ -1287,6 +1532,8 @@ Limite du modèle : la confidentialité est opposable aux attaquants sans device
 | Spécifier le protocole `updatectl` ↔ `updated` (`SO_PEERCRED`, commandes, pas de chemin client) | Dev | T+4 semaines | 🔲 À faire |
 | Définir quotas et format de la sortie du payload, journal critique séparé | Dev | T+4 semaines | 🔲 À faire |
 | Signer ou mesurer l'environnement U-Boot et vérifier le slot booté | Dev | T+6 semaines | 🔲 À faire |
+| Spécifier le bundle de migration (procédure de re-provisionnement) | Architecte | T+4 semaines | 🔲 À faire |
+| Spécifier la politique de rotation de KEK et revocation list | Architecte | T+4 semaines | 🔲 À faire |
 
 #### Priorité 3 : Moyenne (après MVP)
 
@@ -1294,6 +1541,8 @@ Limite du modèle : la confidentialité est opposable aux attaquants sans device
 |---|---|---|---|
 | Implémenter TPM2_Quote (attestation distante) | Dev | T+12 semaines | 🔲 À faire |
 | Implémenter la rotation des clés (KEK, signature) | Dev | T+12 semaines | 🔲 À faire |
+| Spécifier le bundle de migration (procédure de re-provisionnement) | Architecte | T+12 semaines | 🔲 À faire |
+| Spécifier la politique de rotation de KEK et revocation list | Architecte | T+12 semaines | 🔲 À faire |
 | Audit formel du code critique (Prusti, Kani) | Dev | T+24 semaines | 🔲 À faire |
 | Certification Common Criteria ou ANSSI CSPN | Dev lead | T+52 semaines | 🔲 À faire |
 | Build reproductible, SBOM, signature des artefacts | Dev lead | T+12 semaines | 🔲 À faire |
