@@ -417,7 +417,7 @@ portées aux écarts de `EBIOS-RM-analysis.md` § 1.7 et aux questions ouvertes 
 ### Normes, guides et spécifications
 - [[32]] ANSSI, *La méthode EBIOS Risk Manager – Le guide*, v1.5, mars 2024. https://messervices.cyber.gouv.fr/guides/la-methode-ebios-risk-manager-le-guide
 - [[33]] ANSSI, *Règles et recommandations concernant le choix et le dimensionnement des mécanismes cryptographiques*, v3.00, 2026. https://messervices.cyber.gouv.fr/documents-guides/anssi-guide-mecanismes-crypto-3.00.pdf
-- [[34]] ANSSI, *Guide de sélection d'algorithmes cryptographiques* (SIV et AES-KeyWrap recommandés). https://www.arcsi.fr/doc/anssi-guide-selection_crypto-1.0.pdf
+- [[34]] ANSSI, *Guide de sélection d'algorithmes cryptographiques* (SIV et AES-KeyWrap recommandés), v1.0. https://messervices.cyber.gouv.fr/documents-guides/anssi-guide-selection_crypto-1.0.pdf
 - [[35]] ANSSI-FR, *Guide to develop secure applications with Rust*. https://anssi-fr.github.io/rust-guide/
 - [[36]] ANSSI, *Exigences de sécurité matérielle pour plates-formes x86*. https://messervices.cyber.gouv.fr/documents-guides/anssi-guide-exigences_securite_materielle.pdf
 - [[37]] ANSSI, *Profils de protection pour les systèmes industriels*. https://messervices.cyber.gouv.fr/guides/profils-de-protection-pour-les-systemes-industriels
@@ -428,7 +428,7 @@ portées aux écarts de `EBIOS-RM-analysis.md` § 1.7 et aux questions ouvertes 
 - [[42]] NTIA, *Voluntary Framework for Enhancing Update Process Security*. https://www.ntia.gov/files/ntia/publications/ntia_iot_security_update_framework.pdf
 - [[43]] BSI, *TR-02102-1, Cryptographic Mechanisms: Recommendations and Key Lengths*, 2026-01 (AES-GCM-SIV). https://www.bsi.bund.de/SharedDocs/Downloads/EN/BSI/Publications/TechGuidelines/TG02102/BSI-TR-02102-1.pdf
 - [[44]] TCG, *Guidance for Secure Update of Software and Firmware on Devices*, v1r72, 2020. https://trustedcomputinggroup.org/wp-content/uploads/TCG-Secure-Update-of-SW-and-FW-on-Devices-v1r72_pub.pdf
-- [[45]] TCG, *TPM 2.0 Library Specification, Part 1: Architecture*. https://trustedcomputinggroup.org/wp-content/uploads/TPM-Rev-2.0-Part-1-Architecture-01.07-2014-03-13.pdf
+- [[45]] TCG, *Trusted Platform Module Library, Part 1: Architecture*, révision 1.59. https://trustedcomputinggroup.org/wp-content/uploads/TCG_TPM2_r1p59_Part1_Architecture_pub.pdf
 - [[46]] IETF, *RFC 9124, A Manifest Information Model for Firmware Updates in IoT Devices (SUIT)*. https://datatracker.ietf.org/doc/html/rfc9124
 - [[47]] IETF, *Encrypted Payloads in SUIT Manifests* (draft-ietf-suit-firmware-encryption). https://datatracker.ietf.org/doc/draft-ietf-suit-firmware-encryption/
 - [[48]] TUF, *The Update Framework Specification*. https://theupdateframework.github.io/specification/latest/

@@ -277,11 +277,10 @@ Identifiants `JE*` (jail, évasion), distincts des menaces J1 à J4 de [01-threa
 - La spécification actuelle exige que la KEK **ne quitte jamais le TPM**
 
 **Options** :
-1. **Exiger un TPM avec AES Keywrap** :
+1. **Exiger un TPM avec AES Keywrap natif** :
    - ✓ Simple, pas de fallback
    - ✓ KEK ne quitte jamais le TPM
    - ✗ Limite le choix des TPM
-   - **RECOMMANDÉ**
    
 2. **Fallback logiciel avec déscellement de la KEK en RAM** :
    - ✗ Expose la KEK en RAM
@@ -289,19 +288,13 @@ Identifiants `JE*` (jail, évasion), distincts des menaces J1 à J4 de [01-threa
    - ✗ Surface d'attaque augmentée
    - **REJETÉ**
    
-3. **Mécanisme x3 (3 policies TPM restreintes)** :
+3. **Mécanisme x3 (3 déchiffrements AES via policies TPM restreintes)** :
    - ✓ La KEK ne quitte jamais le TPM (déchiffrements effectués par le TPM)
-   - ✓ Permet de limiter les commandes et arguments autorisés via plusieurs branches de policy
+   - ✓ Permet de limiter les commandes et arguments autorisés via 3 branches de policy
    - ✗ Complexité additionnelle (3 branches à auditer)
    - **ALTERNATIVE ACCEPTABLE**
 
-**Décision recommandée** : Option 1 (exiger un TPM avec AES Keywrap natif) est préférée pour sa simplicité. L'option 3 (mécanisme x3) est acceptable si le TPM ne supporte pas AES Keywrap, à condition que :
-- La KEK soit non exportable
-- Chaque branche limite strictement la commande (AES decrypt) et les arguments
-- Les arguments soient contraints via `PolicyCpHash` ou mécanisme équivalent
-- Les trois branches soient explicitement documentées et auditées
-
-Si le TPM ne supporte ni AES Keywrap ni le mécanisme x3 sécurisé, il est rejeté lors du provisioning.
+**Décision** : les **deux modes sont supportés** (natif et x3). Le choix dépend du TPM cible (vérifié au provisioning via `TPM2_GetCapability`). Si le TPM ne supporte ni l'un ni l'autre, il est rejeté lors du provisioning.
 
 ### 2.4 Anti-rollback : où stocker le compteur ?
 
@@ -328,54 +321,19 @@ Si le TPM ne supporte ni AES Keywrap ni le mécanisme x3 sécurisé, il est reje
 
 ### 2.5 Jail : faut-il utiliser `CLONE_NEWUSER` ?
 
-**Question** : Faut-il ajouter `CLONE_NEWUSER` pour isoler les UID ?
+~~**Question** : Faut-il ajouter `CLONE_NEWUSER` pour isoler les UID ?~~
 
-**Analyse** :
-- `CLONE_NEWUSER` permet de mapper les UID du jail vers des UID non-privilégiés sur l'hôte
-- Protège contre les attaques setuid
-- Mais complexifie les bind mounts (doivent être faits avant `unshare` ou avec `CAP_SYS_ADMIN`)
+**Décision** : **pas de `CLONE_NEWUSER`**. Le daemon `updated` doit tourner en root pour accéder au TPM, monter/démonter des filesystems, et écrire sur les devices MTD/block. `CLONE_NEWUSER` est incompatible avec cette architecture. Le jail utilise `setresuid`/`setresgid` pour déprivilégier le processus fils avant `execve`, ce qui est suffisant pour un payload éphémère.
 
-**Options** :
-1. **Pas de NEWUSER** (comme actuellement) :
-   - ✓ Simple
-   - ✗ Si payload échappe au jail, a les mêmes UID que le daemon (root !)
-   - ✗ Nécessite de vérifier qu'aucun binaire setuid n'est accessible
-   
-2. **NEWUSER avec mapping UID** :
-   - ✓ Isolation forte
-   - ✓ Même si évasion, UID non-privilégié
-   - ✗ Complexité (bind mounts avant unshare)
-   - ✗ Incompatible avec certains binaires nécessitant root
-   
-3. **NEWUSER conditionnel** :
-   - ✓ Détecter si le payload nécessite root
-   - ✓ Utiliser NEWUSER si non-root suffisant
-   - **RECOMMANDÉ**
-
-**Décision recommandée** : Option 3 avec NEWUSER par défaut, sauf si le manifeste exige explicitement root. ⚠️ Contredit [06-jail.md](06-jail.md) (« Choix de design », `CLONE_NEWUSER` non utilisé) : décision à trancher.
+Voir [06-jail.md](06-jail.md) section « Choix de design » pour le détail.
 
 ### 2.6 Jail : faut-il utiliser `CLONE_NEWPID` ?
 
-**Question** : Faut-il ajouter `CLONE_NEWPID` pour isoler les PID ?
+~~**Question** : Faut-il ajouter `CLONE_NEWPID` pour isoler les PID ?~~
 
-**Analyse** :
-- `CLONE_NEWPID` crée un nouveau namespace de processus
-- Le processus jail voit son PID comme 1 (init)
-- Protège contre les attaques par PID prédiction
+**Décision** : **pas de `CLONE_NEWPID`**. Enbox n'utilise pas `CLONE_NEWPID` car il nécessite de gérer la logique `init` (processus PID 1 dans le namespace). Pour notre cas d'usage (payload éphémère exécutant un script), un simple `waitpid` suffit. Le timeout est géré par `timer_create` + `SIGALRM` qui envoie `SIGKILL` au processus jail.
 
-**Options** :
-1. **Pas de NEWPID** (comme actuellement) :
-   - ✓ Simple
-   - ✗ Le jail peut voir les processus de l'hôte
-   - ✗ Peut envoyer des signaux aux processus de l'hôte (si même UID)
-   
-2. **NEWPID obligatoire** :
-   - ✓ Isolation des processus
-   - ✓ Le jail ne voit que ses propres processus
-   - ✓ Compatible avec la plupart des payloads
-   - **RECOMMANDÉ**
-
-**Décision recommandée** : Option 2 avec NEWPID obligatoire. ⚠️ Contredit [06-jail.md](06-jail.md) (« Choix de design », `CLONE_NEWPID` non utilisé) : décision à trancher.
+Voir [06-jail.md](06-jail.md) section « Choix de design » pour le détail.
 
 ### 2.7 Jail : faut-il utiliser `CLONE_NEWNET` ?
 
@@ -693,5 +651,5 @@ Le guide Rust de l'ANSSI (https://anssi-fr.github.io/rust-guide/) contient des r
 - [TPM 2.0 Library Specification](https://trustedcomputinggroup.org/resource/tpm-library-specification/)
 - [Linux Namespaces](https://man7.org/linux/man-pages/man7/namespaces.7.html)
 - [Seccomp](https://man7.org/linux/man-pages/man2/seccomp.2.html)
-- [RFC 5649 - AES Key Wrap with Padding](https://tools.ietf.org/html/rfc5649)
-- [RFC 8452 - AES-GCM-SIV](https://tools.ietf.org/html/rfc8452)
+- [RFC 5649 - AES Key Wrap with Padding](https://www.rfc-editor.org/rfc/rfc5649)
+- [RFC 8452 - AES-GCM-SIV](https://www.rfc-editor.org/rfc/rfc8452)

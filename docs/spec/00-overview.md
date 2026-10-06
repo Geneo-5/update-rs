@@ -48,9 +48,9 @@ Système de mise à jour d'une plateforme embarquée de type SolidRun Clearfog, 
 
 ## Questions ouvertes
 
-1. Quel bootloader et quelle chaîne de boot (U-Boot, mesures dans le TPM, secure boot SoC) ?
+1. ~~Quel bootloader et quelle chaîne de boot (U-Boot, mesures dans le TPM, secure boot SoC) ?~~ **Hors scope** : secure boot imposé comme prérequis d'intégration (voir `prerequis-integration.md`).
 2. Quel TPM (modèle exact, révision 1.59 de la spécification), quel bus (SPI/I2C) et quelle distribution embarquée (Buildroot, Yocto, autre) ?
 3. Mise à jour de quoi : rootfs seul, noyau, bootloader, firmware du TPM ?
 4. Taille typique des bundles et débit/connectivité réseau visés ?
-5. Les bundles sont-ils par appareil (une KEK par device), par famille (une KEK par famille), ou pour toute la flotte ?
+5. ~~Les bundles sont-ils par appareil (une KEK par device), par famille (une KEK par famille), ou pour toute la flotte ?~~ **Hors scope** : l'intégrateur choisit la portée de la KEK (voir `key-management.md`). Le projet supporte les deux modes (KEK par device ou par famille).
 6. Quelle version minimale du noyau Linux sur la cible (`openat2` ≥ 5.6, `MS_NOSYMFOLLOW` ≥ 5.10, `cgroup.kill` ≥ 5.14) ?

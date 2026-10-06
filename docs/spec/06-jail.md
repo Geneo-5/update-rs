@@ -157,8 +157,6 @@ au début de la séquence, puis se déprivilégie avant d'exécuter le script d'
 - Le timeout est géré par un `timer_create` + `SIGALRM` qui envoie `SIGKILL` au processus jail.
 - Si le processus jail fork des enfants, ils ne sont **pas** tués automatiquement à la fin du père : le monteur DOIT détruire tous les processus du jail via le cgroup v2 du jail (`cgroup.kill`, Linux ≥ 5.14, ou `SIGKILL` sur chaque PID de `cgroup.procs`). Un `kill(-pgid)` seul est insuffisant (un processus peut quitter son groupe via `setsid`).
 
-> **Point en révision** : [07-security-analysis.md](07-security-analysis.md) § 2.5 et 2.6 recommandent `CLONE_NEWUSER` conditionnel et `CLONE_NEWPID` obligatoire, ce qui contredit les choix de cette section. La décision est suivie dans [EBIOS-RM-analysis.md](../EBIOS-RM-analysis.md) (plan d'amélioration, priorité 1) ; tant qu'elle n'est pas prise, cette section fait foi.
-
 ### Pourquoi `CLONE_NEWNET` (réseau isolé) ?
 
 - Le payload d'update n'a **jamais** besoin d'accès réseau : tout est déjà téléchargé dans le bundle.
@@ -333,6 +331,18 @@ mode = 0o755
 - **Redondance interdite** : un même chemin DOIT apparaître une seule fois.
 - **Validation à la construction** : tout chemin non listé dans `fsset` ne doit **pas**
   être monté (le lecteur ne doit pas interpréter de champs inconnus).
+
+## Modèle A/B et rollback
+
+**Hors scope du daemon** : la procédure A/B (écriture dans le slot inactif, health-check, commit, rollback) n'est **pas gérée par le daemon** `updated`. Le payload chargé dans le jail est un firmware d'update qui contient un **script dédié** responsable de la procédure A/B + rollback.
+
+**Responsabilités** :
+- Le daemon `updated` charge le payload dans le jail et exécute le script d'entrée.
+- Le script d'entrée (fourni par l'éditeur dans le payload) gère la procédure A/B : écriture dans le slot inactif, vérification, bascule, rollback si échec.
+- Si le jail échoue (script retourne non-zéro), le daemon retourne à l'état Idle sans rien avoir modifié (le jail est éphémère, tmpfs).
+- Si le jail réussit, le device reboot sur le nouveau slot (le script a effectué la bascule).
+
+**Pas de persistance du jail** : le jail est entièrement éphémère (tmpfs). Il ne laisse aucun artefact sur l'hôte. Si l'update est réussie, le device reboot. Si l'update échoue, le daemon nettoie et retourne à Idle.
 
 ## Modèle de sécurité du jail
 
@@ -548,19 +558,14 @@ et avant `execve` du script d'entrée.
 
 1. **Net namespace** : isolation totale (pas d'accès réseau), ou partage avec l'hôte ?
    Si partage, faut-il un firewalling dédié via nftables ?
-2. **User namespace** : à utiliser systématiquement (meilleur isolement) ou seulement si
-   l'host kernel le permet proprement (certaines distributions embarquées ont des
-   restrictions) ?
-3. **Poids** : taille mémoire acceptable du tmpfs sur cible (64M ? 128M ? 256M ?) ?
-4. **Payload multi-images** : un bundle peut-il contenir plusieurs jails à exécuter
-   séquentiellement ou en parallèle ?
-5. **Persistance post-jail** : le payload peut-il laisser des artefacts sur l'hôte
-   (fichiers de config, clés) ? Si oui, dans quelle zone et avec quelle politique ?
-6. **Mise à jour du payload lui-même** : le jail est-il utilisé pour installer un
-   nouveau rootfs (cas A/B), ou seulement pour exécuter un script d'application ?
+2. ~~**User namespace** : à utiliser systématiquement (meilleur isolement) ou seulement si
+   l'host kernel le permet proprement ?~~ **Résolu** : pas de `CLONE_NEWUSER` (voir section « Choix de design »).
+3. ~~**Poids** : taille mémoire acceptable du tmpfs sur cible ?~~ **Résolu** : `root_tmpfs_size` configurable dans le manifeste (voir schéma `JailManifest`).
+4. ~~**Payload multi-images** : un bundle peut-il contenir plusieurs jails ?~~ **Résolu** : plusieurs images supportées (voir [02-bundle-format.md](02-bundle-format.md) question 3), avec règles de filtrage pour ne pas exposer toutes les images au jail.
+5. ~~**Persistance post-jail** : le payload peut-il laisser des artefacts sur l'hôte ?~~ **Résolu** : jamais de persistance du jail (éphémère, tmpfs). Reboot si update réussie.
+6. ~~**Mise à jour du payload lui-même** : le jail est-il utilisé pour installer un
+   nouveau rootfs (cas A/B) ?~~ **Résolu** : le jail charge un firmware d'update qui contient un script A/B + rollback (voir section « Modèle A/B et rollback »).
 7. **Compatibilité avec enbox** : doit-on reprendre sa config syntaxique (libconfig) ou
    opter pour TOML/JSON/CBOR ? (CBOR aligne avec le format de manifeste — à privilégier).
-8. **Rollback** : si l'exécution du jail échoue, faut-il pouvoir relancer un jail
-   précédent, ou retourner à Idle ?
-9. **Observation** : faut-il un canal de sortie structuré (JSON lines) pour le script
-   d'entrée, au-delà du simple stdout ?
+8. ~~**Rollback** : si l'exécution du jail échoue, faut-il pouvoir relancer un jail
+   précédent, ou retourner à Idle ?~~ **Résolu** : si le jail échoue, rien n'a été modifié (tmpfs éphémère). Si on rentre dans le jail, c'est au script de gérer le rollback.

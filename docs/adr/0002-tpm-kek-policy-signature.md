@@ -20,7 +20,7 @@ Les options A (clé scellée en RAM) et B (ECDH via TPM) discutées précédemme
 
 1. **Profil A** (clé privée scellée déballée en RAM) : primitives libres mais exposition RAM.
 2. **Profil B** (ECDH résident via `TPM2_ECDH_ZGen`) : pas d'exposition, mais glue, pas PQ, pas de KEM standard.
-3. **Profil C (retenu)** : KEK AES-256 scellée + policy `PolicyAuthorize` conditionnée à la vérification ECC du header par le TPM. **Pas de fallback logiciel** : le TPM DOIT supporter AES Keywrap nativement (ou, à défaut, le mécanisme x3 décrit plus bas). Sessions chiffrées via EK/SRK ECC pour protéger le bus.
+3. **Profil C (retenu)** : KEK AES-256 scellée + policy `PolicyAuthorize` conditionnée à la vérification ECC du header par le TPM. **Deux modes d'encapsulation supportés** : AES Keywrap natif (si le TPM le supporte) ou mécanisme x3 (3 déchiffrements AES via policies TPM restreintes). Sessions chiffrées via EK/SRK ECC pour protéger le bus.
 
 ## Décision
 
@@ -29,7 +29,7 @@ Les options A (clé scellée en RAM) et B (ECDH via TPM) discutées précédemme
 - **KEK AES-256 non exportable** dans le TPM, avec `sign=0, decrypt=1, restricted=0`.
 - **Policy `PolicyAuthorize`** : la KEK ne peut être utilisée pour déchiffrer la clé de session (AES Keywrap) que si le TPM a préalablement validé la signature ECDSA P-256 du header (via `TPM2_VerifySignature` + `TPM2_PolicyAuthorize`).
 - **Clé de vérification ECC P-256** stockée dans le TPM (publique uniquement, privée côté éditeur).
-- **Pas de fallback logiciel** : le TPM cible DOIT supporter le déchiffrement AES Keywrap (RFC 5649) en interne, ou à défaut le mécanisme alternatif x3 (voir plus bas). S'il ne supporte ni l'un ni l'autre, il est rejeté lors du provisioning. La KEK **ne quitte jamais le TPM**.
+- **Pas de fallback logiciel** : le TPM cible DOIT supporter soit le déchiffrement AES Keywrap (RFC 5649) en interne (mode natif), soit le mécanisme alternatif x3 (3 déchiffrements AES via policies TPM restreintes). S'il ne supporte ni l'un ni l'autre, il est rejeté lors du provisioning. La KEK **ne quitte jamais le TPM**.
 - **Sessions chiffrées** : toutes les commandes TPM sensibles sont exécutées sous session chiffrée/authentifiée dérivée de l'EK/SRK ECC (protège contre A4).
 
 ### Justification
@@ -43,7 +43,7 @@ Les options A (clé scellée en RAM) et B (ECDH via TPM) discutées précédemme
 ### Positives
 
 - La clé de session (master key de 256 bits, dont les clés de chunk sont dérivées par HKDF) peut être générée côté éditeur de manière standard (CSPRNG), puis encapsulée via AES Keywrap (RFC 5649).
-- Le format de bundle est simple : un header de 512 octets avec `wrapped_session_key` (40 octets) et signature ECC (64 octets).
+- Le format de bundle est simple : un header de 1024 octets avec `wrapped_session_key` (40 octets en mode natif, 48 octets en mode x3), signature ECC (64 octets), et signatures Ed25519 + ML-DSA (3360 octets, défense en profondeur hybride classique + post-quantique).
 - Le TPM joue son rôle d'ancre de confiance sans devoir faire de chiffrement de masse.
 - L'alignement avec ANSSI est maintenu pour les primitives côté éditeur (Ed25519 + ML-DSA pour les signatures "long-terme" ; ECDSA P-256 via TPM uniquement pour le header, acceptable).
 - Résistance à l'écoute du bus TPM (sessions chiffrées).
@@ -57,22 +57,22 @@ Les options A (clé scellée en RAM) et B (ECDH via TPM) discutées précédemme
 
 ### À revoir
 
-- Décider si la KEK doit être renouvelable en field (pour compromis) ou fixe à vie.
+- ~~Décider si la KEK doit être renouvelable en field (pour compromis) ou fixe à vie.~~ **Résolu** : rotation supportée (voir `key-management.md` section 7.7).
 - Choisir la bibliothèque Rust pour AES Keywrap (`aes-kw` ou implémentation sur `aes`).
 - Valider que `swtpm` supporte les sessions chiffrées ECDH pour les tests.
-- Confirmer sur le TPM cible (révision 1.59) quelle commande réalise le déballage de la clé de session (AES Keywrap natif ou mécanisme x3).
-- Spécifier précisément la chaîne de boot pour ancrer le TPM dans une chaîne de confiance vérifiée (secure boot → bootloader → kernel → rootfs → `updated`).
+- ~~Confirmer sur le TPM cible (révision 1.59) quelle commande réalise le déballage de la clé de session (AES Keywrap natif ou mécanisme x3).~~ **Résolu** : deux modes supportés (natif ou x3, voir `docs/spec/03-tpm.md`).
+- ~~Spécifier précisément la chaîne de boot pour ancrer le TPM dans une chaîne de confiance vérifiée (secure boot → bootloader → kernel → rootfs → `updated`).~~ **Hors scope** : secure boot imposé comme prérequis d'intégration (voir `prerequis-integration.md`).
 
 ### Alternative : mécanisme x3
 
-Si le TPM ne supporte pas AES Keywrap (RFC 5649) nativement, un mécanisme alternatif x3 est acceptable :
+Si le TPM ne supporte pas AES Keywrap (RFC 5649) nativement, le mécanisme x3 est utilisé :
 
-- Le TPM effectue 3 déchiffrements AES séparés via des policies restreintes
-- Chaque policy limite strictement la commande (AES decrypt) et les arguments
+- Le TPM effectue 3 déchiffrements AES-ECB séparés via des policies restreintes
+- Chaque policy limite strictement la commande (AES decrypt) et les arguments (`PolicyCpHash`)
 - La KEK reste toujours dans le TPM (non exportable)
-- Les arguments sont contraints via `PolicyCpHash` ou mécanisme équivalent
+- Les arguments sont contraints via `PolicyCpHash` et la signature de l'éditeur (`PolicyAuthorize`)
 
-Voir `docs/spec/03-tpm.md` section "Mécanisme alternatif x3" pour les détails.
+Voir `docs/spec/03-tpm.md` section "Mécanisme x3 : 3 déchiffrements AES via policies TPM restreintes" pour les détails.
 
 ## Conformité au guide ANSSI 3.00 (2026)
 
@@ -126,4 +126,4 @@ Voir [05-crypto.md](../spec/05-crypto.md) pour l'analyse détaillée de conformi
 - RFC 5649 : AES Key Wrap with Padding Algorithm.
 - TPM 2.0 Library Specification, Part 2 (Structures), Part 3 (Commands) : `TPM2_PolicyAuthorize`, `TPM2_VerifySignature`, `TPM2_Duplicate`, sessions chiffrées.
 - RFC 6979 : Deterministic Usage of ECDSA and DSA.
-- [Guide ANSSI 3.00 (2026)](https://cyber.gouv.fr/publications/regles-et-recommandations-concernant-le-choix-et-le-dimensionnement-des-mecanismes-cryptographiques) : Règles et recommandations concernant le choix et le dimensionnement des mécanismes cryptographiques.
+- [Guide ANSSI 3.00 (2026)](https://messervices.cyber.gouv.fr/documents-guides/anssi-guide-mecanismes-crypto-3.00.pdf) : Règles et recommandations concernant le choix et le dimensionnement des mécanismes cryptographiques.

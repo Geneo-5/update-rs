@@ -545,6 +545,43 @@ La KEK peut être renouvelée lors :
 
 Une rotation doit préserver l'accès aux données encore nécessaires.
 
+### Propositions de rotation KEK (suivant ANSSI RGS B2 et NIST SP 800-57)
+
+**Crypto-période recommandée** : selon NIST SP 800-57 Part 1 Rev. 5 (Table 2), une clé symétrique AES-256 utilisée pour la protection de clés (key wrapping) a une crypto-période recommandée de **2 ans maximum** pour une protection à long terme, ou **5 ans** pour une protection à court terme. L'ANSSI RGS B2 recommande de définir une crypto-période explicite pour chaque clé.
+
+**Mécanisme de rotation** :
+
+1. **Bundle de migration KEK** : l'éditeur génère un bundle spécial contenant :
+   - La nouvelle KEK (chiffrée par l'ancienne KEK via AES Keywrap)
+   - La nouvelle policy TPM (signée par l'éditeur)
+   - Un script d'installation (exécuté dans le jail)
+
+2. **Processus de rotation** :
+   ```text
+   Device reçoit bundle de migration
+          ↓
+   Vérification signature (ancienne KEK)
+          ↓
+   Déchiffrement nouvelle KEK (via ancienne KEK dans TPM)
+          ↓
+   Installation nouvelle KEK dans TPM (nouveau NV index)
+          ↓
+   Mise à jour policy TPM (nouvelle policy signée)
+          ↓
+   Incrément compteur NV (anti-rollback)
+          ↓
+   Suppression ancienne KEK (ancien NV index)
+   ```
+
+3. **Période de coexistence** : pendant la rotation, le device accepte les bundles signés avec l'ancienne OU la nouvelle KEK. La période de coexistence est limitée (ex: 30 jours) pour éviter les attaques par replay.
+
+4. **Traitement des équipements hors ligne** : les devices qui ne reçoivent pas le bundle de migration dans la période de coexistence sont considérés comme "orphelins" et nécessitent une procédure de ré-enrôlement manuel (RMA).
+
+**Références** :
+- NIST SP 800-57 Part 1 Rev. 5, Section 5.3 : « Cryptoperiods »
+- ANSSI RGS B2, Section 6 : « Durée de vie des clés »
+- ANSSI Guide des mécanismes cryptographiques v3.00, Section A.4.1 : « Crypto-période »
+
 ---
 
 ## 7.8 Destruction
@@ -1093,13 +1130,13 @@ Pour un produit de production, les exigences minimales suivantes sont recommand�
 ### ANSSI
 
 - **ANSSI, Référentiel Général de Sécurité v2.0, Annexe B2 — Gestion des clés cryptographiques, version 2.00, 8 juin 2012.**  
-  urlDocument officiel ANSSI — RGS v2.0 B2https://cyber.gouv.fr/sites/default/files/2022-10/RGS_v-2-0_B2.pdf
+  urlDocument officiel ANSSI — RGS v2.0 B2https://cyber.gouv.fr/documents/339/RGS_v-2-0_B2.pdf
 
 - **ANSSI, Référentiel Général de Sécurité v2.0 — documents et annexes.**  
   urlPage officielle RGS ANSSIhttps://cyber.gouv.fr/reglementation/reglementation-identite-confiance-numerique/securite-echanges-voie-electronique/referentiel-general-de-securite/documents-referentiel-general-de-securite/
 
-- **ANSSI, Guide des mécanismes cryptographiques — règles et recommandations concernant le choix et le dimensionnement des mécanismes cryptographiques.**  
-  urlGuide officiel ANSSI sur les mécanismes cryptographiqueshttps://cyber.gouv.fr/sites/default/files/2021/03/anssi-guide-mecanismes_crypto-2.04.pdf
+- **ANSSI, Guide des mécanismes cryptographiques — règles et recommandations concernant le choix et le dimensionnement des mécanismes cryptographiques, v3.00, 2026.**  
+  urlGuide officiel ANSSI sur les mécanismes cryptographiqueshttps://messervices.cyber.gouv.fr/documents-guides/anssi-guide-mecanismes-crypto-3.00.pdf
 
 ### NIST
 

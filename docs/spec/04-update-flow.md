@@ -85,11 +85,29 @@ fn handle_signal(sig: Signal) {
 
 ## Questions ouvertes
 
-1. Quel health-check, et qui le définit (service, script, watchdog) ?
-2. Stratégie de staging : espace temporaire nécessaire, ou écriture directe dans le slot inactif ?
-3. Interface avec le bootloader (U-Boot env, `libubootenv`, autre) ?
-4. Mises à jour partielles/delta : hors périmètre v1 ?
-5. Déclenchement : pull périodique, push, commande manuelle (`updatectl`) ?
-6. Persistance de l'état du jail entre exécutions : le jail peut-il laisser des artefacts sur l'hôte (fichiers de config, clés) ? Si oui, dans quelle zone ?
-7. Rollback après échec du jail : faut-il pouvoir relancer un jail précédent, ou retourner à Idle ?
-8. La machine à états décrit l'exécution d'un payload dans un jail, alors que REQ-FLW-1 à 3 supposent un modèle A/B (slot inactif, health-check, rollback) absent des états ci-dessus. Les deux modèles sont-ils combinés (le jail écrit dans le slot inactif, voir ADR-0003) et quels états ajouter (écriture du slot, commit, rollback) ?
+1. Quel health-check, et qui le définit (service, script, watchdog) ? **Hors scope** : le health-check est géré par le script A/B dans le jail (voir [06-jail.md](06-jail.md) section « Modèle A/B et rollback »).
+2. Stratégie de staging : espace temporaire nécessaire, ou écriture directe dans le slot inactif ? **Hors scope** : géré par le script A/B dans le jail.
+3. Interface avec le bootloader (U-Boot env, `libubootenv`, autre) ? **Hors scope** : chaîne de boot imposée comme prérequis d'intégration (voir `prerequis-integration.md`).
+4. Mises à jour partielles/delta : hors périmètre v1 ? **Hors scope** : pas de delta updates en v1.
+5. ~~Déclenchement : pull périodique, push, commande manuelle (`updatectl`) ?~~ **Résolu** : **client compatible cron** qui check une URI. Le daemon `updated` ne fait pas de pull automatique. Un client externe (script cron, service systemd timer) appelle `updatectl check <URI>` pour vérifier les mises à jour disponibles, puis `updatectl apply` pour les appliquer.
+6. ~~Persistance de l'état du jail entre exécutions : le jail peut-il laisser des artefacts sur l'hôte ?~~ **Résolu** : pas de persistance du jail (éphémère, tmpfs). Reboot si update réussie.
+7. ~~Rollback après échec du jail : faut-il pouvoir relancer un jail précédent, ou retourner à Idle ?~~ **Résolu** : si le jail échoue, rien n'a été modifié (tmpfs éphémère), le daemon retourne à Idle. Si on rentre dans le jail, c'est au script de gérer le rollback (voir [06-jail.md](06-jail.md) section « Modèle A/B et rollback »).
+8. ~~La machine à états décrit l'exécution d'un payload dans un jail, alors que REQ-FLW-1 à 3 supposent un modèle A/B (slot inactif, health-check, rollback) absent des états ci-dessus.~~ **Résolu** : le modèle A/B est géré par le script dans le jail, pas par le daemon. Le daemon charge le payload et exécute le script ; le script gère l'écriture dans le slot inactif, le commit, et le rollback si échec.
+
+## Client compatible cron
+
+**Architecture** : le daemon `updated` ne fait **pas** de pull automatique. Un client externe (script cron, service systemd timer, ou commande manuelle) est responsable de vérifier les mises à jour disponibles.
+
+**Client `updatectl`** :
+- `updatectl check <URI>` : vérifie si une mise à jour est disponible à l'URI donnée (télécharge uniquement le header, vérifie la signature, compare les versions).
+- `updatectl apply` : applique la mise à jour (télécharge le bundle complet, le passe au daemon `updated`).
+- `updatectl status` : affiche l'état du daemon et la version installée.
+
+**Canal de communication** : socket Unix stream avec `SO_PEERCRED` pour l'authentification du client (vérification de l'UID/GID du processus client).
+
+**Exemple de configuration cron** :
+```bash
+# /etc/cron.d/update-rs
+# Vérifier les mises à jour toutes les heures
+0 * * * * root /usr/bin/updatectl check https://updates.example.com/bundle.bin && /usr/bin/updatectl apply
+```

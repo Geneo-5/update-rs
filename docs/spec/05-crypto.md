@@ -12,9 +12,11 @@ n'est pas retenu, ses dépendances cryptographiques servent de liste de référe
 
 ## Candidats (à confirmer par audit des dépendances)
 
-| Besoin | Candidat | Crates |
-|---|---|---|
-| AEAD | **AES-256-GCM-SIV** (RFC 8452, nonce-misuse resistant) | `aes-gcm-siv` (RustCrypto) |
+**Principe** : utiliser les bibliothèques **validées par l'ANSSI** ou **auditées** (RustCrypto, ANSSI MLA, projets GitHub ANSSI). Aucune primitive n'est réimplémentée.
+
+| Besoin | Candidat | Crates | Statut ANSSI/audit |
+|---|---|---|---|
+| AEAD | **AES-256-GCM-SIV** (RFC 8452, nonce-misuse resistant) | `aes-gcm-siv` (RustCrypto) | ✅ Audité (RustCrypto) |
 | AEAD (fallback) | AES-256-GCM (si GCM-SIV non disponible) | `aes-gcm` (RustCrypto) |
 | KDF | HKDF-SHA256 (dérivation de la clé et du nonce de chaque chunk depuis la clé de session, voir [02-bundle-format.md](02-bundle-format.md)) | `hkdf`, `sha2` |
 | KEM classique | X25519 (DHKEM, HPKE RFC 9180) | `x25519-dalek`, `hpke` |
@@ -62,7 +64,7 @@ n'est pas retenu, ses dépendances cryptographiques servent de liste de référe
 
 ## Conformité au guide ANSSI 3.00 (2026)
 
-**Référence** : [Guide ANSSI — Règles et recommandations concernant le choix et le dimensionnement des mécanismes cryptographiques, version 3.00 (2026-03-20)](https://cyber.gouv.fr/publications/regles-et-recommandations-concernant-le-choix-et-le-dimensionnement-des-mecanismes-cryptographiques)
+**Référence** : [Guide ANSSI — Règles et recommandations concernant le choix et le dimensionnement des mécanismes cryptographiques, version 3.00 (2026-03-20)](https://messervices.cyber.gouv.fr/documents-guides/anssi-guide-mecanismes-crypto-3.00.pdf)
 
 ### Cryptographie symétrique
 
@@ -180,4 +182,5 @@ Le guide ANSSI 3.00 recommande de viser une sécurité post-quantique pour les m
 7. **Transition post-quantique pour ECDSA P-256** : quel calendrier pour adopter ML-DSA dans les TPM ?
 8. **Migration de clé** : comment gérer la rotation de la KEK si une vulnérabilité est découverte dans AES-256 (improbable mais à prévoir) ?
 9. Clé de session de 32 octets : conserver RFC 5649 (padding non exercé) ou revenir à RFC 3394 (même taille de ciphertext, plus simple, mieux connu) ? Impact sur `keywrap_alg`, REQ-CRY-5, REQ-TPM-6 et le mécanisme x3.
+   > **État actuel** : RFC 5649 est retenu dans `02-bundle-format.md`, `03-tpm.md`, `ADR-0002` et `CHANGES-security-review.md`. L'historique des décisions est documenté dans `CHANGES-security-review.md` (section « Dérivation de clés par chunk »). Cette question peut être résolue par un ADR formel si un retour à RFC 3394 est envisagé.
 10. HKDF-SHA256 : conformité au guide ANSSI 3.00 (fonctions de dérivation de clés) à confirmer, et crate `hkdf` à auditer.

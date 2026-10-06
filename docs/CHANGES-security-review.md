@@ -5,6 +5,13 @@
 
 Ce document résume les modifications apportées à la spécification suite à l'analyse de sécurité approfondie.
 
+> **Note de lecture** : les sections ci-dessous documentent l'**historique** des décisions, y compris les étapes intermédiaires. L'**état final** des paramètres mentionnés ici est :
+> - `wrapped_session_key` : **40 octets** (RFC 5649, clé de session 32 octets = multiple de 8, pas de padding)
+> - Algorithme d'encapsulation : **RFC 5649** (retenu)
+> - Clé de session : **32 octets** (master key, dérivée par HKDF pour chaque chunk)
+>
+> Les tailles mentionnées dans les sections suivantes (56 octets, etc.) correspondent à des étapes intermédiaires de la réflexion et ne reflètent pas l'état actuel de la spécification.
+
 ## Résumé des décisions
 
 ### 1. KEK ne quitte jamais le TPM

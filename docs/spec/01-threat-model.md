@@ -44,7 +44,7 @@ Statut : Brouillon (proposition à valider)
 - **REQ-THR-1** — Un bundle modifié, tronqué, réordonné ou rejoué DOIT être rejeté.
 - **REQ-THR-2** — Un bundle ne DOIT pas être déchiffrable sans le TPM (et l'état de boot) du device visé.
 - **REQ-THR-3** — Une version inférieure au compteur anti-rollback DOIT être rejetée.
-- **REQ-THR-4** — La KEK NE DOIT JAMAIS quitter le TPM, ni même transiter en clair dans la RAM. Le TPM DOIT effectuer le déchiffrement AES Keywrap (RFC 5649) en interne et retourner uniquement la clé de session déballée. Si le TPM ne supporte pas AES Keywrap nativement, un mécanisme alternatif x3 est acceptable : le TPM effectue 3 déchiffrements AES séparés via des policies restreintes (chaque policy limite strictement la commande et les arguments), la KEK restant toujours dans le TPM.
+- **REQ-THR-4** — La KEK NE DOIT JAMAIS quitter le TPM, ni même transiter en clair dans la RAM. Le TPM DOIT effectuer le déchiffrement AES Keywrap (RFC 5649) en interne et retourner uniquement la clé de session déballée. Si le TPM ne supporte pas AES Keywrap nativement, le mécanisme alternatif x3 est utilisé : le TPM effectue 3 déchiffrements AES séparés via des policies restreintes (chaque policy limite strictement la commande et les arguments), la KEK restant toujours dans le TPM.
 - **REQ-THR-5** — Un attaquant écoutant le bus TPM (A4) NE DOIT PAS obtenir la clé de session, la KEK, ou les paramètres de commande sensibles.
 - **REQ-THR-6** — La chaîne de confiance DOIT être ancrée depuis le ROM/SoC secure boot jusqu'au TPM (bootloader vérifié → kernel vérifié → rootfs vérifié → `updated` vérifié → TPM policy/PCR).
 - **REQ-THR-7** — Tout contenu issu du bundle DOIT être traité comme **hostile** jusqu'à sa transformation en une représentation interne validée et bornée.
@@ -106,7 +106,7 @@ Le **worker** peut être très fortement sandboxé. Le **supervisor** conserve l
 
 ## Questions ouvertes
 
-1. Les bundles sont-ils par appareil, par famille d'appareils, ou pour toute la flotte ?
+1. ~~Les bundles sont-ils par appareil, par famille d'appareils, ou pour toute la flotte ?~~ **Hors scope** : l'intégrateur choisit la portée de la KEK (voir `key-management.md`). Le projet supporte les deux modes (KEK par device ou par famille).
 2. Faut-il la résistance à un attaquant post-quantique « store now, decrypt later » sur la confidentialité ?
 3. Que se passe-t-il si l'EK/AK du TPM est compromise (root of trust hardware) ?
-4. Quel bootloader (U-Boot) et quel mécanisme de secure boot pour ancrer la chaîne de confiance jusqu'au TPM ?
+4. ~~Quel bootloader (U-Boot) et quel mécanisme de secure boot pour ancrer la chaîne de confiance jusqu'au TPM ?~~ **Hors scope** : secure boot imposé comme prérequis d'intégration (voir `prerequis-integration.md`).
