@@ -1,0 +1,7 @@
+[toolchain]
+channel = "stable"
+components = ["clippy", "rustfmt"]
+profile = "minimal"
+# Build natif par défaut. La cible embarquée (Clearfog Pro, Marvell Armada 388,
+# ARMv7-A hard-float : armv7-unknown-linux-gnueabihf) est optionnelle :
+# voir docs/cross-compilation.md.

@@ -97,8 +97,10 @@ jobs:
           path: fuzz/artifacts/
 
   cross-compile:
-    name: Cross-compile ARMv7
+    name: Cross-compile ARMv7 (optionnel)
     runs-on: ubuntu-latest
+    # Non bloquant : voir docs/cross-compilation.md
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       
@@ -163,7 +165,7 @@ jobs:
   ci-success:
     name: CI Success
     runs-on: ubuntu-latest
-    needs: [lint, test, fuzz, cross-compile, coverage, security-audit]
+    needs: [lint, test, fuzz, coverage, security-audit]
     if: always()
     steps:
       - name: Check all jobs succeeded
@@ -171,7 +173,6 @@ jobs:
           if [ "${{ needs.lint.result }}" != "success" ] || \
              [ "${{ needs.test.result }}" != "success" ] || \
              [ "${{ needs.fuzz.result }}" != "success" ] || \
-             [ "${{ needs.cross-compile.result }}" != "success" ] || \
              [ "${{ needs.coverage.result }}" != "success" ] || \
              [ "${{ needs.security-audit.result }}" != "success" ]; then
             echo "❌ Un ou plusieurs jobs ont échoué"

@@ -2,6 +2,10 @@
 **/*.rs.bk
 .DS_Store
 *.swp
+/fuzz/target
+/fuzz/artifacts
+/fuzz/coverage
+/tarpaulin-report.*
 # Clés et matériel de test : ne jamais committer de secrets
 /secrets/
 *.pem

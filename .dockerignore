@@ -1,0 +1,22 @@
+# Contexte de build Docker : ne pas envoyer (ni copier dans l'image) ce qui suit.
+# NB : .cargo/ doit rester dans le contexte (linker et runner ARMv7).
+
+# Artefacts de build de l'hôte (binaires macOS inutilisables dans le conteneur)
+target
+fuzz/target
+fuzz/artifacts
+fuzz/corpus
+fuzz/coverage
+tarpaulin-report.*
+
+# Dépôt et état local
+.git
+.github
+.claude
+.DS_Store
+**/.DS_Store
+
+# Secrets et matériel de test (cf. .gitignore)
+secrets
+**/*.pem
+**/*.key

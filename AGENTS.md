@@ -6,7 +6,7 @@ Ce document décrit les conventions, outils et contraintes que tout agent (humai
 
 `update-rs` est un système de mise à jour sécurisé pour plateformes embarquées ARMv7 (SolidRun Clearfog Pro, Marvell Armada 388). Il repose sur :
 
-- **TPM 2.0** (révision 1.59) pour l'ancrage de confiance et le scellement des clés
+- **TPM 2.0** (révision 1.39) pour l'ancrage de confiance et le scellement des clés
 - **AES-GCM-SIV** pour le chiffrement authentifié du payload
 - **ECDSA P-256** pour la signature des bundles (avec agilité cryptographique post-quantique prévue)
 - **Jail** via namespaces Linux (sans CLONE_NEWUSER/CLONE_NEWPID)
@@ -34,6 +34,7 @@ Ce document décrit les conventions, outils et contraintes que tout agent (humai
 ## 2. Environnement de build — Docker obligatoire
 
 **Règle absolue** : tout build, test, lint et fuzzing doit s'effectuer dans le conteneur Docker. Aucun agent ne doit installer Rust ou les toolchains cross-compilation sur l'hôte.
+Le build est **natif** par défaut ; la cross-compilation ARMv7 est optionnelle (voir `docs/cross-compilation.md`).
 
 ### 2.1 Construction de l'image
 
@@ -51,8 +52,11 @@ make docker-build
 # Shell interactif
 make docker-shell
 
-# Build complet
+# Build release (natif)
 make docker-build-release
+
+# (Optionnel) Cross-compilation ARMv7
+make docker-build-arm
 
 # Tests
 make docker-test
@@ -69,7 +73,7 @@ make docker-fuzz TARGET=bundle_header
 | Variable | Valeur par défaut | Description |
 |---|---|---|
 | `CARGO_TARGET_DIR` | `/workspace/target` | Répertoire des artefacts de build |
-| `UPDATE_RS_TARGET` | `armv7-unknown-linux-gnueabihf` | Cible cross-compilation |
+| `UPDATE_RS_TARGET` | *(non définie)* | Définie uniquement dans l'image `cross` (`armv7-unknown-linux-gnueabihf`) |
 | `FUZZ_CORPUS_DIR` | `/workspace/fuzz/corpus` | Corpus de fuzzing |
 | `FUZZ_ARTIFACTS_DIR` | `/workspace/fuzz/artifacts` | Crashes et timeouts |
 
@@ -166,7 +170,7 @@ make docker-fuzz-short    # 5 minutes de fuzzing sur les cibles principales
 - [ ] Si changement cryptographique : revue contre le guide ANSSI v3.00
 - [ ] Si nouveau parsing de données externes : cible de fuzzing ajoutée
 - [ ] Si nouveau scénario de menace : mise à jour de `EBIOS-RM-analysis.md`
-- [ ] Cross-compilation ARMv7 testée : `cargo build --target armv7-unknown-linux-gnueabihf --release`
+- [ ] (Optionnel) Cross-compilation ARMv7 testée si le changement touche au code spécifique à la cible : `make docker-build-arm`
 
 ---
 
@@ -302,7 +306,7 @@ jobs:
   fuzz:
     - 5 minutes de fuzzing sur chaque cible
   
-  cross-compile:
+  cross-compile:  # optionnel, non bloquant
     - cargo build --target armv7-unknown-linux-gnueabihf --release
   
   coverage:

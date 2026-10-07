@@ -1,16 +1,27 @@
 # syntax=docker/dockerfile:1.6
 # Dockerfile pour update-rs : environnement de développement et CI
-# Multi-stage : build (avec Rust nightly pour fuzzing) + runtime (minimal)
+#
+# Le build est NATIF (architecture du conteneur). La cross-compilation ARMv7
+# est optionnelle : stage `cross`, documentée dans docs/cross-compilation.md.
+#
+# Stages :
+#   base     : paquets communs
+#   build    : toolchains Rust (stable + nightly), outils (fuzz, audit, couverture)
+#   cross    : (optionnel) build + toolchain de cross-compilation ARMv7 et qemu-user
+#   release  : compile les binaires (natif)
+#   runtime  : image minimale d'exécution (natif)
+#   dev      : build + outils de debug (dernier stage = cible par défaut)
 
 # ============================================================================
 # Stage 1 : Base commune
 # ============================================================================
 FROM debian:bookworm-slim AS base
 
-# Éviter les prompts interactifs
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Installer les paquets de base
+# bash + pipefail : un `curl | sh` qui échoue doit faire échouer le build
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
@@ -19,55 +30,46 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ============================================================================
-# Stage 2 : Build (Rust stable + nightly, cross-compilation, TPM2-TSS)
+# Stage 2 : Build natif (Rust stable + nightly, TPM2-TSS)
 # ============================================================================
 FROM base AS build
 
-# Installer les outils de build et cross-compilation
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    gcc-arm-linux-gnueabihf \
-    libc6-dev-armhf-cross \
     libssl-dev \
     libtss2-dev \
-    qemu-user \
-    qemu-user-static \
     && rm -rf /var/lib/apt/lists/*
 
-# Installer Rust (stable + nightly pour fuzzing)
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
-    PATH=/usr/local/cargo/bin:$PATH
+    PATH=/usr/local/cargo/bin:${PATH}
 
+# Rust stable puis nightly (cargo-fuzz).
+# Les options courtes -c sont répétables : plus robuste que "--component a b".
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
-    --default-toolchain stable \
-    --profile minimal \
-    --component rustfmt clippy
+      --default-toolchain stable \
+      --profile minimal \
+      -c rustfmt -c clippy \
+    && rustup toolchain install nightly --profile minimal -c rust-src
 
-# Installer Rust nightly pour cargo-fuzz
-RUN rustup install nightly \
-    && rustup component add rust-src --toolchain nightly
+# Outils cargo (un layer chacun : un échec n'invalide pas les autres)
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo +nightly install cargo-fuzz
 
-# Installer les cibles cross-compilation
-RUN rustup target add armv7-unknown-linux-gnueabihf
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo install cargo-tarpaulin
 
-# Installer cargo-fuzz (nécessite nightly)
-RUN cargo +nightly install cargo-fuzz
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo install cargo-audit
 
-# Installer cargo-tarpaulin pour la couverture
-RUN cargo install cargo-tarpaulin
-
-# Installer cargo-audit pour la sécurité
-RUN cargo install cargo-audit
-
-# Configurer le linker pour cross-compilation
-RUN mkdir -p /workspace/.cargo
-COPY .cargo/config.toml /workspace/.cargo/config.toml
-
-# Définir le répertoire de travail
 WORKDIR /workspace
 
-# Copier les fichiers de dépendances (pour le cache Docker)
+# --- Cache des dépendances -------------------------------------------------
+# On ne copie que les manifestes, avec des sources factices : sans cibles
+# (src/lib.rs ou src/main.rs), `cargo fetch` échoue ("no targets specified").
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates/update-bundle/Cargo.toml crates/update-bundle/
 COPY crates/update-tpm/Cargo.toml crates/update-tpm/
@@ -76,59 +78,76 @@ COPY crates/updated/Cargo.toml crates/updated/
 COPY crates/updatectl/Cargo.toml crates/updatectl/
 COPY crates/bundle-tool/Cargo.toml crates/bundle-tool/
 
-# Pré-télécharger les dépendances (cache Docker)
-RUN cargo fetch || true
+RUN for c in update-bundle update-tpm update-slot; do \
+        mkdir -p "crates/$c/src" && : > "crates/$c/src/lib.rs"; \
+    done \
+    && for c in updated updatectl bundle-tool; do \
+        mkdir -p "crates/$c/src" && echo 'fn main() {}' > "crates/$c/src/main.rs"; \
+    done \
+    && cargo fetch --locked \
+    && rm -rf crates/*/src
 
-# Copier le reste du code
+# --- Code source -----------------------------------------------------------
+# (voir .dockerignore)
 COPY . .
 
-# Variables d'environnement pour cross-compilation
-ENV PKG_CONFIG_ALLOW_CROSS=1 \
-    CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc \
-    CARGO_TARGET_DIR=/workspace/target \
-    UPDATE_RS_TARGET=armv7-unknown-linux-gnueabihf \
+ENV CARGO_TARGET_DIR=/workspace/target \
     FUZZ_CORPUS_DIR=/workspace/fuzz/corpus \
     FUZZ_ARTIFACTS_DIR=/workspace/fuzz/artifacts
 
 # ============================================================================
-# Stage 3 : Runtime (minimal, pour exécution des tests)
+# Stage 3 (optionnel) : Cross-compilation ARMv7 — voir docs/cross-compilation.md
+# ============================================================================
+FROM build AS cross
+
+# qemu-user fournit qemu-arm (runner des tests ARMv7, cf. .cargo/config.toml).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc-arm-linux-gnueabihf \
+    libc6-dev-armhf-cross \
+    qemu-user \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN rustup target add armv7-unknown-linux-gnueabihf
+
+# Pas de PKG_CONFIG_ALLOW_CROSS : il ferait lier des bibliothèques de l'hôte
+# dans les binaires ARMv7. Quand tss-esapi sera ajouté, utiliser un sysroot
+# ARMv7 (PKG_CONFIG_SYSROOT_DIR / PKG_CONFIG_PATH, cf. .cargo/config.toml).
+ENV CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc \
+    UPDATE_RS_TARGET=armv7-unknown-linux-gnueabihf
+
+# ============================================================================
+# Stage 4 : Release (compilation native)
+# ============================================================================
+FROM build AS release
+
+RUN cargo build --release --locked --workspace
+
+# ============================================================================
+# Stage 5 : Runtime (natif, minimal)
 # ============================================================================
 FROM debian:bookworm-slim AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Installer uniquement les bibliothèques nécessaires à l'exécution
+# Quand le backend TPM (tss-esapi) sera ajouté, installer ici les bibliothèques
+# d'exécution libtss2-* correspondantes.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    libssl3 \
-    libtss2-esys-3.0.2-0 \
-    libtss2-mu0 \
-    libtss2-rc0 \
-    libtss2-sys0 \
-    libtss2-tcti-device0 \
-    qemu-user \
     && rm -rf /var/lib/apt/lists/*
 
-# Copier les binaires depuis le stage build
-COPY --from=build /workspace/target/armv7-unknown-linux-gnueabihf/release/updated /usr/local/bin/updated
-COPY --from=build /workspace/target/armv7-unknown-linux-gnueabihf/release/updatectl /usr/local/bin/updatectl
-COPY --from=build /workspace/target/release/bundle-tool /usr/local/bin/bundle-tool
+COPY --from=release /workspace/target/release/updated /usr/local/bin/updated
+COPY --from=release /workspace/target/release/updatectl /usr/local/bin/updatectl
+COPY --from=release /workspace/target/release/bundle-tool /usr/local/bin/bundle-tool
 
-# Créer les répertoires nécessaires
-RUN mkdir -p /var/run /var/log/update-rs
+RUN mkdir -p /run/update-rs /var/log/update-rs
 
-# Exposer le socket Unix (pour updatectl)
-VOLUME /var/run
-
-# Par défaut, lancer le démon
 CMD ["updated"]
 
 # ============================================================================
-# Stage 4 : Dev (environnement de développement complet)
+# Stage 6 : Dev (environnement de développement complet, natif)
 # ============================================================================
 FROM build AS dev
 
-# Installer des outils supplémentaires pour le développement
 RUN apt-get update && apt-get install -y --no-install-recommends \
     vim \
     less \
@@ -137,5 +156,4 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gdb \
     && rm -rf /var/lib/apt/lists/*
 
-# Shell par défaut
 CMD ["/bin/bash"]

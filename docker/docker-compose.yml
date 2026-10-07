@@ -1,114 +1,138 @@
-version: '3.8'
+name: update-rs
+
+# Blocs réutilisés par les services de build
+x-build-context: &build-context
+  context: ..
+  dockerfile: docker/Dockerfile
+
+x-workspace-volumes: &workspace-volumes
+  - ..:/workspace
+  - cargo-cache:/usr/local/cargo/registry
+  - target-cache:/workspace/target
 
 services:
-  # Service de développement (shell interactif)
+  # Service de développement (shell interactif, natif)
   dev:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile
+      <<: *build-context
       target: dev
-    volumes:
-      - ..:/workspace
-      - cargo-cache:/usr/local/cargo/registry
-      - target-cache:/workspace/target
+    image: update-rs:dev
+    volumes: *workspace-volumes
     working_dir: /workspace
     command: /bin/bash
     stdin_open: true
     tty: true
-    environment:
-      - CARGO_TARGET_DIR=/workspace/target
-      - UPDATE_RS_TARGET=armv7-unknown-linux-gnueabihf
 
-  # Service de build (build complet)
+  # Build release natif
   build:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile
+      <<: *build-context
       target: build
-    volumes:
-      - ..:/workspace
-      - cargo-cache:/usr/local/cargo/registry
-      - target-cache:/workspace/target
+    image: update-rs:build
+    volumes: *workspace-volumes
     working_dir: /workspace
     command: cargo build --workspace --release
 
-  # Service de test
+  # Tests
   test:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile
+      <<: *build-context
       target: build
-    volumes:
-      - ..:/workspace
-      - cargo-cache:/usr/local/cargo/registry
-      - target-cache:/workspace/target
+    image: update-rs:build
+    volumes: *workspace-volumes
     working_dir: /workspace
     command: cargo test --workspace --all-targets
 
-  # Service de lint (clippy + rustfmt)
+  # Lint (rustfmt + clippy)
   lint:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile
+      <<: *build-context
       target: build
-    volumes:
-      - ..:/workspace
-      - cargo-cache:/usr/local/cargo/registry
-      - target-cache:/workspace/target
+    image: update-rs:build
+    volumes: *workspace-volumes
     working_dir: /workspace
-    command: bash -c "cargo fmt --all --check && cargo clippy --all-targets -- -D warnings"
+    command: >
+      bash -c "cargo fmt --all --check &&
+      cargo clippy --workspace --all-targets -- -D warnings"
 
-  # Service de fuzzing
+  # Fuzzing (cargo-fuzz a besoin de nightly). Cible par défaut : bundle_header.
+  # Le répertoire de build du fuzzer est isolé de celui des builds normaux.
   fuzz:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile
+      <<: *build-context
       target: build
+    image: update-rs:build
     volumes:
       - ..:/workspace
       - cargo-cache:/usr/local/cargo/registry
       - target-cache:/workspace/target
+      - fuzz-target:/workspace/fuzz/target
     working_dir: /workspace
     command: cargo +nightly fuzz run bundle_header -- -max_total_time=300
     environment:
       - RUST_BACKTRACE=1
+      - CARGO_TARGET_DIR=/workspace/fuzz/target
 
-  # Service de couverture
+  # Couverture. Moteur llvm : le moteur ptrace par défaut de tarpaulin n'est
+  # pas utilisable sur aarch64 et exige seccomp=unconfined dans Docker.
   coverage:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile
+      <<: *build-context
       target: build
-    volumes:
-      - ..:/workspace
-      - cargo-cache:/usr/local/cargo/registry
-      - target-cache:/workspace/target
+    image: update-rs:build
+    volumes: *workspace-volumes
     working_dir: /workspace
-    command: cargo tarpaulin --workspace --fail-under 80 --out Html
+    command: cargo tarpaulin --workspace --engine llvm --fail-under 80 --out Html
 
-  # Service runtime (démon)
-  runtime:
+  # (optionnel) Cross-compilation ARMv7 : docker compose --profile cross run --rm build-arm
+  # Voir docs/cross-compilation.md
+  build-arm:
+    profiles: ["cross"]
     build:
-      context: ..
-      dockerfile: docker/Dockerfile
+      <<: *build-context
+      target: cross
+    image: update-rs:cross
+    volumes: *workspace-volumes
+    working_dir: /workspace
+    command: >
+      cargo build --release --target armv7-unknown-linux-gnueabihf
+      -p updated -p updatectl
+
+  # (optionnel) Tests ARMv7 exécutés sous qemu-user (runner de .cargo/config.toml)
+  test-arm:
+    profiles: ["cross"]
+    build:
+      <<: *build-context
+      target: cross
+    image: update-rs:cross
+    volumes: *workspace-volumes
+    working_dir: /workspace
+    command: cargo test --target armv7-unknown-linux-gnueabihf -p update-bundle -p update-tpm -p update-slot
+
+  # Démon (natif). Démarré à la demande : docker compose --profile runtime up runtime
+  runtime:
+    profiles: ["runtime"]
+    build:
+      <<: *build-context
       target: runtime
+    image: update-rs:runtime
     volumes:
-      - /var/run:/var/run
-      - /var/log/update-rs:/var/log/update-rs
-    devices:
-      - /dev/tpmrm0:/dev/tpmrm0
-    privileged: false
+      - update-logs:/var/log/update-rs
+    # Sur une machine Linux avec un vrai TPM, décommenter (sinon le conteneur
+    # refuse de démarrer quand /dev/tpmrm0 n'existe pas) :
+    # devices:
+    #   - /dev/tpmrm0:/dev/tpmrm0
     cap_drop:
       - ALL
-    cap_add:
-      - NET_BIND_SERVICE
     security_opt:
       - no-new-privileges:true
     read_only: true
     tmpfs:
       - /tmp
-      - /run
+      - /run/update-rs
 
 volumes:
   cargo-cache:
   target-cache:
+  fuzz-target:
+  update-logs:
