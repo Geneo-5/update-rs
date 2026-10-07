@@ -6,7 +6,7 @@ Ce document décrit les conventions, outils et contraintes que tout agent (humai
 
 `update-rs` est un système de mise à jour sécurisé pour plateformes embarquées ARMv7 (SolidRun Clearfog Pro, Marvell Armada 388). Il repose sur :
 
-- **TPM 2.0** (révision 1.39) pour l'ancrage de confiance et le scellement des clés
+- **TPM 2.0** (révision 1.59) pour l'ancrage de confiance et le scellement des clés
 - **AES-GCM-SIV** pour le chiffrement authentifié du payload
 - **ECDSA P-256** pour la signature des bundles (avec agilité cryptographique post-quantique prévue)
 - **Jail** via namespaces Linux (sans CLONE_NEWUSER/CLONE_NEWPID)
