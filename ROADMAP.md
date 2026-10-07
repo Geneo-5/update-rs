@@ -24,8 +24,8 @@ Ce document est la checklist de développement pour `update-rs`. Chaque tâche p
 - [x] ✅ Installer `cargo-fuzz` (nightly)
 - [x] ✅ Installer `cargo-tarpaulin` pour la couverture
 - [x] ✅ Configurer le cache Docker (layer caching optimal)
-- [ ] ⬜ Tester `docker build -t update-rs:dev .` (infrastructure prête, test à valider)
-- [ ] ⬜ Tester cross-compilation ARMv7 dans le conteneur (infrastructure prête, test à valider)
+- [x] ✅ Tester `docker build -t update-rs:dev .` (build testé et validé)
+- [x] ✅ Tester cross-compilation ARMv7 dans le conteneur (build testé et validé)
 - [x] ✅ Créer `docker/docker-compose.yml` pour faciliter l'usage
 - [x] ✅ Documenter l'usage Docker dans `AGENTS.md` § 2
 
@@ -38,15 +38,15 @@ Ce document est la checklist de développement pour `update-rs`. Chaque tâche p
 
 ### 0.3 CI/CD
 
-- [ ] ⬜ Créer `.github/workflows/ci.yml` (GitHub Actions)
-- [ ] ⬜ Job `lint` : `cargo fmt --check` + `cargo clippy -- -D warnings`
-- [ ] ⬜ Job `test` : `cargo test --all` + `cargo test --all --release`
-- [ ] ⬜ Job `fuzz` : 5 minutes de fuzzing sur chaque cible
-- [ ] ⬜ Job `cross-compile` : build ARMv7
-- [ ] ⬜ Job `coverage` : `cargo tarpaulin --fail-under 80`
-- [ ] ⬜ Job `security-audit` : `cargo audit` (vérifier les CVEs dans les dépendances)
-- [ ] ⬜ Configurer les pre-merge gates (tous les jobs doivent passer)
-- [ ] ⬜ Configurer les notifications (Slack, email, ou autre)
+- [x] ✅ Créer `.github/workflows/ci.yml` (GitHub Actions)
+- [x] ✅ Job `lint` : `cargo fmt --check` + `cargo clippy -- -D warnings`
+- [x] ✅ Job `test` : `cargo test --all` + `cargo test --all --release`
+- [x] ✅ Job `fuzz` : 5 minutes de fuzzing sur chaque cible
+- [x] ✅ Job `cross-compile` : build ARMv7
+- [x] ✅ Job `coverage` : `cargo tarpaulin --fail-under 80`
+- [x] ✅ Job `security-audit` : `cargo audit` (vérifier les CVEs dans les dépendances)
+- [x] ✅ Configurer les pre-merge gates (tous les jobs doivent passer)
+- [x] ✅ Configurer les notifications (notification échec CI dans chaque job)
 
 **Critère de succès** : Un agent peut cloner le repo, lancer `make docker-shell`, et avoir un environnement de développement complet en < 5 minutes.
 
