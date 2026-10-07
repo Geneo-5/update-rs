@@ -2,7 +2,7 @@
 # Usage : make <target>
 # Voir AGENTS.md pour les détails
 
-.PHONY: help docker-build docker-shell docker-test docker-lint docker-fuzz docker-fuzz-short docker-fuzz-all docker-coverage build test lint fuzz coverage clean
+.PHONY: help docker-build docker-prune docker-shell docker-test docker-lint docker-fuzz docker-fuzz-short docker-fuzz-all docker-coverage docker-build-release docker-build-arm docker-clean build test lint fuzz coverage clean
 
 # Variable pour le target de fuzzing (défaut : bundle_header)
 TARGET ?= bundle_header
@@ -20,6 +20,9 @@ help: ## Afficher cette aide
 
 docker-build: ## Construire l'image Docker
 	docker build -t update-rs:dev -f docker/Dockerfile --target dev .
+
+docker-prune: ## Prune l'image Docker
+	docker builder prune -f
 
 docker-shell: ## Lancer un shell interactif dans le conteneur
 	docker compose -f docker/docker-compose.yml run --rm dev
@@ -45,12 +48,14 @@ docker-fuzz-all: ## Lancer 10 minutes de fuzzing sur toutes les cibles
 docker-coverage: ## Lancer la couverture de code dans le conteneur
 	docker compose -f docker/docker-compose.yml run --rm coverage
 
-docker-build-release: ## Build release cross-compilation ARMv7
+docker-build-release: ## Build release natif (workspace complet)
 	docker compose -f docker/docker-compose.yml run --rm build
 
-docker-clean: ## Nettoyer les conteneurs et volumes Docker
-	docker compose -f docker/docker-compose.yml down -v
-	docker system prune -f
+docker-build-arm: ## (optionnel) Cross-compilation ARMv7 de updated/updatectl (docs/cross-compilation.md)
+	docker compose -f docker/docker-compose.yml --profile cross run --rm build-arm
+
+docker-clean: ## Nettoyer les conteneurs et volumes Docker du projet
+	docker compose -f docker/docker-compose.yml --profile cross --profile runtime down -v --remove-orphans
 
 # ============================================================================
 # Build natif (pour référence, mais utiliser Docker en production)
@@ -62,7 +67,7 @@ build: ## Build local (workspace)
 build-release: ## Build release local
 	cargo build --workspace --release
 
-build-arm: ## Build cross-compilation ARMv7
+build-arm: ## (optionnel) Build cross-compilation ARMv7 (docs/cross-compilation.md)
 	cargo build --workspace --target armv7-unknown-linux-gnueabihf --release
 
 # ============================================================================

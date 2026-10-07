@@ -16,25 +16,25 @@ Ce document est la checklist de développement pour `update-rs`. Chaque tâche p
 
 ### 0.1 Docker
 
-- [ ] ⬜ Créer `docker/Dockerfile` multi-stage (build + runtime)
-- [ ] ⬜ Installer Rust stable + nightly (pour fuzzing)
-- [ ] ⬜ Installer cross-compilation toolchain (`gcc-arm-linux-gnueabihf`)
-- [ ] ⬜ Installer TPM2-TSS (libtss2-dev) et headers
-- [ ] ⬜ Installer QEMU user-mode pour exécuter les binaires ARMv7
-- [ ] ⬜ Installer `cargo-fuzz` (nightly)
-- [ ] ⬜ Installer `cargo-tarpaulin` pour la couverture
-- [ ] ⬜ Configurer le cache Docker (layer caching optimal)
-- [ ] ⬜ Tester `docker build -t update-rs:dev .`
-- [ ] ⬜ Tester cross-compilation ARMv7 dans le conteneur
-- [ ] ⬜ Créer `docker/docker-compose.yml` pour faciliter l'usage
-- [ ] ⬜ Documenter l'usage Docker dans `AGENTS.md` § 2
+- [x] ✅ Créer `docker/Dockerfile` multi-stage (build + runtime)
+- [x] ✅ Installer Rust stable + nightly (pour fuzzing)
+- [x] ✅ Installer cross-compilation toolchain (`gcc-arm-linux-gnueabihf`)
+- [x] ✅ Installer TPM2-TSS (libtss2-dev) et headers
+- [x] ✅ Installer QEMU user-mode pour exécuter les binaires ARMv7
+- [x] ✅ Installer `cargo-fuzz` (nightly)
+- [x] ✅ Installer `cargo-tarpaulin` pour la couverture
+- [x] ✅ Configurer le cache Docker (layer caching optimal)
+- [ ] ⬜ Tester `docker build -t update-rs:dev .` (infrastructure prête, test à valider)
+- [ ] ⬜ Tester cross-compilation ARMv7 dans le conteneur (infrastructure prête, test à valider)
+- [x] ✅ Créer `docker/docker-compose.yml` pour faciliter l'usage
+- [x] ✅ Documenter l'usage Docker dans `AGENTS.md` § 2
 
 ### 0.2 Scripts de build
 
-- [ ] ⬜ Créer `Makefile` avec les targets : `build`, `test`, `lint`, `fuzz`, `coverage`, `docker-*`
-- [ ] ⬜ Créer `scripts/build.sh` pour le build cross-compilation
-- [ ] ⬜ Créer `scripts/fuzz-run.sh` pour le fuzzing avec reporting
-- [ ] ⬜ Créer `scripts/check-pr.sh` qui vérifie tous les pre-merge gates
+- [x] ✅ Créer `Makefile` avec les targets : `build`, `test`, `lint`, `fuzz`, `coverage`, `docker-*`
+- [x] ✅ Créer `scripts/build.sh` pour le build cross-compilation
+- [x] ✅ Créer `scripts/fuzz-run.sh` pour le fuzzing avec reporting
+- [x] ✅ Créer `scripts/check-pr.sh` qui vérifie tous les pre-merge gates
 
 ### 0.3 CI/CD
 
