@@ -1,5 +1,6 @@
 [toolchain]
-channel = "stable"
+# Edition 2024 (resolver = "3") requiert Rust 1.85+
+channel = "1.85.0"
 components = ["clippy", "rustfmt"]
 # Cible embarquée : Clearfog Pro (Marvell Armada 388, ARMv7-A, hard-float)
 targets = ["armv7-unknown-linux-gnueabihf"]

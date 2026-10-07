@@ -1,40 +1,18 @@
 //! Cible de fuzzing pour le décryptage et la validation des chunks
 //!
-//! Cette cible fuzz le décryptage AES-GCM-SIV des chunks du bundle.
-//! Elle vérifie que :
-//! 1. Les tags GCM invalides sont rejetés
-//! 2. Les chunks altérés sont détectés
-//! 3. Le parser ne plante pas sur des entrées malformées
+//! Cette cible fuzz le parsing binaire des chunks du bundle.
+//! Chaque chunk est structuré : index(4) + data_length(4) + tag(16) + data(variable).
+//! Le parser vérifie les bornesMIN_CHUNK_HEADER_SIZE (24 o) et les limites
+//! compilées (MAX_CHUNK_SIZE).
 
 use libfuzzer_sys::fuzz_target;
+use update_bundle::BundleChunk;
 
 fuzz_target!(|data: &[u8]| {
-    // Un chunk a au minimum :
-    // - chunk_index (4 octets)
-    // - chunk_size (4 octets)
-    // - tag GCM (16 octets)
-    // - données (taille variable)
-    if data.len() < 24 {
-        return;
-    }
+    // Appel au parser réel : retourne Result, pas de panic
+    let _ = BundleChunk::parse(data);
 
-    // TODO : Appeler update_bundle::BundleChunk::decrypt(data, session_key)
-    // et vérifier que :
-    // 1. Le décryptage ne panique pas
-    // 2. Les tags GCM invalides sont rejetés (Result::Err)
-    // 3. Les chunks altérés sont détectés
-
-    // Placeholder : extraire les champs
-    let chunk_index = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
-    let chunk_size = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
-    let tag = &data[8..24];
-
-    // Vérifier les bornes
-    if chunk_size > 10 * 1024 * 1024 {
-        // Chunk trop grand, devrait être rejeté
-        return;
-    }
-
-    // Pour l'instant, on ne fait rien pour éviter les faux positifs
-    let _ = (chunk_index, tag);
+    // Le parser retourne une erreur propre pour :
+    // - données trop courtes (< 24 o)
+    // Aucune condition de course ni panic n'est attendue.
 });

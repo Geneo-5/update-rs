@@ -52,18 +52,20 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
       -c rustfmt -c clippy \
     && rustup toolchain install nightly --profile minimal -c rust-src
 
-# Outils cargo (un layer chacun : un échec n'invalide pas les autres)
+# Outils cargo (un layer chacun : un échec n'invalide pas les autres).
+# Versions épinglées pour éviter les ruptures de build lors de mises à jour
+# incompatibles.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    cargo +nightly install cargo-fuzz
+    cargo +nightly install cargo-fuzz --locked
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    cargo install cargo-tarpaulin
+    cargo install cargo-tarpaulin --locked
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    cargo install cargo-audit
+    cargo install cargo-audit --locked
 
 WORKDIR /workspace
 
@@ -84,7 +86,8 @@ RUN for c in update-bundle update-tpm update-slot; do \
     && for c in updated updatectl bundle-tool; do \
         mkdir -p "crates/$c/src" && echo 'fn main() {}' > "crates/$c/src/main.rs"; \
     done \
-    && cargo fetch --locked \
+    && (test -s Cargo.lock || cargo generate-lockfile) \
+    && cargo fetch \
     && rm -rf crates/*/src
 
 # --- Code source -----------------------------------------------------------
@@ -137,7 +140,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=release /workspace/target/release/updated /usr/local/bin/updated
 COPY --from=release /workspace/target/release/updatectl /usr/local/bin/updatectl
-COPY --from=release /workspace/target/release/bundle-tool /usr/local/bin/bundle-tool
+# Note : bundle-tool est un utilitaire hôte (création de bundles),
+# il ne doit PAS être dans l'image runtime embarquée.
 
 RUN mkdir -p /run/update-rs /var/log/update-rs
 

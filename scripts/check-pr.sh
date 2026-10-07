@@ -46,7 +46,7 @@ echo ""
 run_check "Formatage (rustfmt)" "cargo fmt --all --check"
 
 # 2. Lint (clippy)
-run_check "Lint (clippy)" "cargo clippy --all-targets -- -D warnings"
+run_check "Lint (clippy)" "cargo clippy --workspace --all-targets -- -D warnings"
 
 # 3. Tests (debug)
 run_check "Tests (debug)" "cargo test --workspace --all-targets"

@@ -26,7 +26,7 @@ jobs:
         run: cargo fmt --all --check
       
       - name: Run clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:
     name: Test
@@ -162,10 +162,11 @@ jobs:
         run: cargo audit
 
   # Job de synthèse : tous les checks doivent passer
+  # Note : `cross-compile` a `continue-on-error: true` et n'est donc pas bloquant.
   ci-success:
     name: CI Success
     runs-on: ubuntu-latest
-    needs: [lint, test, fuzz, cross-compile, coverage, security-audit]
+    needs: [lint, test, fuzz, coverage, security-audit]
     if: always()
     steps:
       - name: Check all jobs succeeded
@@ -173,7 +174,6 @@ jobs:
           if [ "${{ needs.lint.result }}" != "success" ] || \
              [ "${{ needs.test.result }}" != "success" ] || \
              [ "${{ needs.fuzz.result }}" != "success" ] || \
-             [ "${{ needs.cross-compile.result }}" != "success" ] || \
              [ "${{ needs.coverage.result }}" != "success" ] || \
              [ "${{ needs.security-audit.result }}" != "success" ]; then
             echo "❌ Un ou plusieurs jobs ont échoué"
@@ -195,7 +195,7 @@ jobs:
             echo "⚠️ SLACK_WEBHOOK_URL non configurée, notification ignorée"
             exit 0
           fi
-          JOB_NAMES=("lint" "test" "fuzz" "cross-compile" "coverage" "security-audit")
+          JOB_NAMES=("lint" "test" "fuzz" "coverage" "security-audit")
           FAILED=""
           for job in "${JOB_NAMES[@]}"; do
             result="${{ needs.$job.result }}"
