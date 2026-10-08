@@ -195,14 +195,12 @@ jobs:
             echo "⚠️ SLACK_WEBHOOK_URL non configurée, notification ignorée"
             exit 0
           fi
-          JOB_NAMES=("lint" "test" "fuzz" "coverage" "security-audit")
           FAILED=""
-          for job in "${JOB_NAMES[@]}"; do
-            result="${{ needs.$job.result }}"
-            if [ "$result" = "failure" ]; then
-              FAILED="${FAILED}${job} "
-            fi
-          done
+          if [ "${{ needs.lint.result }}" = "failure" ]; then FAILED="${FAILED}lint "; fi
+          if [ "${{ needs.test.result }}" = "failure" ]; then FAILED="${FAILED}test "; fi
+          if [ "${{ needs.fuzz.result }}" = "failure" ]; then FAILED="${FAILED}fuzz "; fi
+          if [ "${{ needs.coverage.result }}" = "failure" ]; then FAILED="${FAILED}coverage "; fi
+          if [ "${{ needs.security-audit.result }}" = "failure" ]; then FAILED="${FAILED}security-audit "; fi
           curl -s -X POST "$SLACK_WEBHOOK_URL" \
             -H 'Content-Type: application/json' \
             -d "$(jq -n \
