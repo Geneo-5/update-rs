@@ -409,7 +409,6 @@ impl BundleChunk {
     ///
     /// La clé et le nonce par chunk sont zeroizés après usage via
     /// `zeroize::Zeroize`.
-    #[allow(unused_variables)]
     pub fn decrypt(
         &self,
         session_key: &[u8; 32],
@@ -420,21 +419,30 @@ impl BundleChunk {
         use crate::errors::CryptoError;
 
         // ── Dérivation de clé par chunk (HKDF-Expand-SHA256) ─────────
-        // info = "update-rs/chunk" || bundle_id || chunk_index(u32 BE)
-        // okm[0..32]  = chunk_key (AES-256)
-        // okm[32..44] = chunk_nonce (96-bit)
-        //
-        // NOTE : Implémentation en attente des dépendances aes-gcm-siv.
-        // Voir `docs/spec/05-crypto.md` §REQ-CRY-9.
+        let (chunk_key, chunk_nonce) =
+            crate::crypto::derive_chunk_key(session_key, bundle_id, self.index);
 
         // ── AAD : bundle_id || chunk_index || chunk_count ||
         // │          is_last_chunk || data_length ────────────────────
-        // NOTE : L'AAD est haché intègre via AES-GCM-SIV (AAD non
-        // déchiffré mais vérifié).
+        let mut aad = Vec::with_capacity(45);
+        aad.extend_from_slice(bundle_id);
+        aad.extend_from_slice(&self.index.to_be_bytes());
+        aad.extend_from_slice(&chunk_count.to_be_bytes());
+        aad.push(if is_last { 1u8 } else { 0u8 });
+        aad.extend_from_slice(&self.data_length.to_be_bytes());
 
-        Err(CryptoError::DecryptionFailed(
-            "chiffrement AES-256-GCM-SIV non implémenté".into(),
-        ))
+        // Le tag (16 octets) est stocké séparément dans `self.tag`.
+        // Les données à déchiffrer sont `encrypted_data` sans le tag.
+        let encrypted_chunk = &self.encrypted_data;
+
+        let decrypted_data =
+            crate::crypto::aes_gcm_siv_decrypt(&chunk_key, &chunk_nonce, encrypted_chunk, &aad)?;
+
+        // Zeroization des secrets (REQ-CRY-4)
+        chunk_key.zeroize();
+        chunk_nonce.zeroize();
+
+        Ok(bytes::Bytes::from(decrypted_data))
     }
 }
 

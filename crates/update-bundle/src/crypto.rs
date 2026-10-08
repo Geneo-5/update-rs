@@ -20,9 +20,13 @@
 
 use crate::errors::CryptoError;
 use aes::cipher::{Block, BlockDecryptMut, BlockSizeUser, KeyInit};
+use aes_gcm_siv::{Aes256GcmSiv, Key, Nonce, Tag};
+use aead::generic_array::GenericArray;
+use aead::{AeadInPlace, InPlaceCipher};
 use hkdf::Hkdf;
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
+use typenum::U32;
 use zeroize::Zeroize;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -69,27 +73,44 @@ pub const SESSION_KEY_SIZE: usize = 32;
 /// - `CryptoError::InvalidKeySize` : clé ne fait pas 32 octets
 /// - `CryptoError::InvalidNonceSize` : nonce ne fait pas 12 octets
 /// - `CryptoError::DecryptionFailed` : échec interne du chiffrement
-#[allow(unused_variables)]
 pub fn aes_gcm_siv_encrypt(
     key: &[u8],
     nonce: &[u8],
     plaintext: &[u8],
     aad: &[u8],
 ) -> Result<Vec<u8>, CryptoError> {
-    // NOTE : Implémentation en attente de `aes-gcm-siv` stable.
-    //
-    // Ce code utilisera Aes256GcmSiv de aes-gcm-siv avec :
-    // - KeyInit pour initialiser le chiffreur
-    // - Encryptor::encrypt_in_place_detached pour chiffrement authentifié
-    // - Le tag est appendé au ciphertext (format standard GCM)
-    //
-    // Voir `docs/spec/05-crypto.md` §REQ-CRY-1.
-    //
-    // TODO: implémenter avec aes-gcm-siv stable
+    if key.len() != AES256_KEY_SIZE {
+        return Err(CryptoError::InvalidKeySize {
+            size: key.len(),
+            expected: AES256_KEY_SIZE,
+        });
+    }
+    if nonce.len() != AES_GCM_NONCE_SIZE {
+        return Err(CryptoError::InvalidNonceSize {
+            size: nonce.len(),
+            expected: AES_GCM_NONCE_SIZE,
+        });
+    }
 
-    Err(CryptoError::DecryptionFailed(
-        "AES-256-GCM-SIV non implémenté".into(),
-    ))
+    let key = Key::<Aes256GcmSiv>::from_slice(key);
+    let cipher = Aes256GcmSiv::new(key);
+
+    let nonce = {
+        let mut nonce_arr = GenericArray::<u8, typenum::U12>::default();
+        nonce_arr.copy_from_slice(nonce);
+        nonce_arr
+    };
+
+    // Buffer : plaintext + tag (16 octets)
+    let mut buf = Vec::with_capacity(plaintext.len() + AES_GCM_TAG_SIZE);
+    buf.extend_from_slice(plaintext);
+
+    let tag = cipher
+        .encrypt_in_place_detached(&nonce, aad, &mut buf)
+        .map_err(|e| CryptoError::DecryptionFailed(e.to_string()))?;
+
+    buf.extend_from_slice(&tag.as_bytes());
+    Ok(buf)
 }
 
 /// Déchiffre des données avec AES-256-GCM-SIV.
@@ -114,31 +135,57 @@ pub fn aes_gcm_siv_encrypt(
 /// # Sécurité
 ///
 /// La clé et le nonce sont zeroizés après usage (REQ-CRY-4).
-#[allow(unused_variables)]
 pub fn aes_gcm_siv_decrypt(
     key: &[u8],
     nonce: &[u8],
     ciphertext_with_tag: &[u8],
     aad: &[u8],
 ) -> Result<Vec<u8>, CryptoError> {
-    // NOTE : Implémentation en attente de `aes-gcm-siv` stable.
-    //
-    // Ce code utilisera Aes256GcmSiv de aes-gcm-siv avec :
-    // - KeyInit pour initialiser le déchiffreur
-    // - Decryptor::decrypt_in_place_detached pour vérification + déchiffrement
-    // - Le tag est extrait des 16 derniers octets
-    // - Comparaison constant-time du tag via subtle::ConstantTimeEq
-    //
-    // Voir `docs/spec/05-crypto.md` §REQ-CRY-1.
-    //
-    // TODO: implémenter avec aes-gcm-siv stable
+    if key.len() != AES256_KEY_SIZE {
+        return Err(CryptoError::InvalidKeySize {
+            size: key.len(),
+            expected: AES256_KEY_SIZE,
+        });
+    }
+    if nonce.len() != AES_GCM_NONCE_SIZE {
+        return Err(CryptoError::InvalidNonceSize {
+            size: nonce.len(),
+            expected: AES_GCM_NONCE_SIZE,
+        });
+    }
 
-    // Zeroization des secrets après usage (REQ-CRY-4) — le key/nonce
-    // sera zeroizé à la fin de la fonction appelante.
+    let key = Key::<Aes256GcmSiv>::from_slice(key);
+    let cipher = Aes256GcmSiv::new(key);
 
-    Err(CryptoError::DecryptionFailed(
-        "AES-256-GCM-SIV non implémenté".into(),
-    ))
+    let nonce = {
+        let mut nonce_arr = GenericArray::<u8, typenum::U12>::default();
+        nonce_arr.copy_from_slice(nonce);
+        nonce_arr
+    };
+
+    // Split ciphertext + tag (last 16 bytes)
+    let len = ciphertext_with_tag.len();
+    if len < AES_GCM_TAG_SIZE {
+        return Err(CryptoError::DecryptionFailed(
+            "ciphertext trop court pour contenir un tag".into(),
+        ));
+    }
+    let (ciphertext, tag_bytes) =
+        ciphertext_with_tag.split_at(len - AES_GCM_TAG_SIZE);
+
+    let tag = Tag::from_slice(tag_bytes);
+
+    // Decrypt in place
+    let mut plaintext = Vec::with_capacity(ciphertext.len());
+    plaintext.extend_from_slice(ciphertext);
+
+    cipher
+        .decrypt_in_place_detached(&nonce, aad, &mut plaintext, tag)
+        .map_err(|e| CryptoError::DecryptionFailed(e.to_string()))?;
+
+    // Zeroization des secrets (REQ-CRY-4) — le key/nonce
+    // est zeroizé à la fin de la fonction appelante.
+    Ok(plaintext)
 }
 
 // ─── HKDF-SHA256 (RFC 5869) ──────────────────────────────────────────────────
@@ -252,7 +299,7 @@ pub fn derive_manifest_key(
 
 /// Enveloppe une clé de session (32 octets) selon AES Key Wrap avec Padding.
 ///
-/// Producit un ciphertext de 40 octets à partir d'une clé de 32 octets,
+/// Produit un ciphertext de 40 octets à partir d'une clé de 32 octets,
 /// conformément à RFC 5649 §3 :
 ///
 /// - Les 32 octets de clé sont padisés avec `0x01` suivi de zéros
@@ -275,21 +322,34 @@ pub fn derive_manifest_key(
 /// # Notes de sécurité
 ///
 /// La KEK est zeroisée après usage (`zeroize::Zeroize`).
-#[allow(unused_variables)]
 pub fn aes_key_wrap_padded(key: &[u8], kek: &[u8]) -> Result<Vec<u8>, CryptoError> {
-    // NOTE : Implémentation en attente de `aes-kw` stable.
-    //
-    // Ce code utilisera `aes_kwp::wrap()` de la crate aes-kw avec :
-    // - kek de 32 octets (AES-256)
-    // - key de 32 octets → 40 octets de ciphertext (RFC 5649)
-    //
-    // Voir `docs/spec/05-crypto.md` §REQ-CRY-5.
-    //
-    // TODO: implémenter avec aes-kw stable
+    if key.len() != SESSION_KEY_SIZE {
+        return Err(CryptoError::InvalidKeySize {
+            size: key.len(),
+            expected: SESSION_KEY_SIZE,
+        });
+    }
+    if kek.len() != AES256_KEY_SIZE {
+        return Err(CryptoError::InvalidKeySize {
+            size: kek.len(),
+            expected: AES256_KEY_SIZE,
+        });
+    }
 
-    Err(CryptoError::DecryptionFailed(
-        "AES Key Wrap with Padding (RFC 5649) non implémenté".into(),
-    ))
+    // Padding RFC 5649 : clé de 32 octets → 40 octets (0x01 + zéros)
+    let mut padded = [0u8; 40];
+    padded[0..32].copy_from_slice(key);
+    padded[32] = 0x01; // Marqueur de padding (RFC 5649 §3)
+
+    // Chiffrer le padding avec AES Key Wrap (RFC 5649)
+    let cipher = aes_kwp::KwpAes256::new(kek);
+
+    let mut ciphertext = [0u8; 40];
+    let len = cipher
+        .wrap_key(&padded, &mut ciphertext)
+        .map_err(|e| CryptoError::DecryptionFailed(e.to_string()))?;
+
+    Ok(ciphertext[..len].to_vec())
 }
 
 /// Développe une clé de session enveloppée selon AES Key Wrap with Padding.
@@ -315,20 +375,39 @@ pub fn aes_key_wrap_padded(key: &[u8], kek: &[u8]) -> Result<Vec<u8>, CryptoErro
 /// # Conformité
 ///
 /// Satisfait REQ-CRY-5 (32→40 octets) et REQ-CRY-7 (résistance aux fautes).
-#[allow(unused_variables)]
 pub fn aes_key_unwrap_padded(wrapped_key: &[u8], kek: &[u8]) -> Result<Vec<u8>, CryptoError> {
-    // NOTE : Implémentation en attente de `aes-kw` stable.
-    //
-    // Ce code utilisera `aes_kwp::unwrap()` de la crate aes-kw avec :
-    // - kek de 32 octets (AES-256)
-    // - wrapped_key de 40 octets → 32 octets de plaintext (RFC 5649)
-    //
-    // Voir `docs/spec/05-crypto.md` §REQ-CRY-5.
-    //
-    // TODO: implémenter avec aes-kw stable
+    if wrapped_key.len() != 40 {
+        return Err(CryptoError::InvalidWrappedKeySize {
+            size: wrapped_key.len(),
+            expected: 40,
+        });
+    }
+    if kek.len() != AES256_KEY_SIZE {
+        return Err(CryptoError::InvalidKeySize {
+            size: kek.len(),
+            expected: AES256_KEY_SIZE,
+        });
+    }
+
+    let cipher = aes_kwp::KwpAes256::new(kek);
+
+    let mut padded = [0u8; 40];
+    let len = cipher
+        .unwrap_key(&wrapped_key, &mut padded)
+        .map_err(|e| CryptoError::DecryptionFailed(e.to_string()))?;
+
+    // Vérifier le padding RFC 5649 : 0x01 suivi de zéros
+    if len >= 33 && padded[32] == 0x01 {
+        let pad_bytes = &padded[33..len];
+        if pad_bytes.iter().all(|&b| b == 0) {
+            let mut key = [0u8; SESSION_KEY_SIZE];
+            key.copy_from_slice(&padded[0..SESSION_KEY_SIZE]);
+            return Ok(key);
+        }
+    }
 
     Err(CryptoError::DecryptionFailed(
-        "AES Key Wrap with Padding (RFC 5649) non implémenté".into(),
+        "padding RFC 5649 invalide".into(),
     ))
 }
 
