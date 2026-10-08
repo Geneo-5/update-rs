@@ -89,6 +89,16 @@ pub enum ParseError {
         /// Nombre d'octets requis (header_size).
         need: usize,
     },
+    /// Offset calculé pour un chunk dépasse la taille des données disponibles.
+    ///
+    /// Surviens lorsque le calcul `chunk_size × chunk_index` dépasse la taille
+    /// des données disponibles, indiquant un header corrompu ou malveillant.
+    DataTooLong {
+        /// Offset calculé (peut être overflowé).
+        got: u64,
+        /// Taille des données disponibles.
+        max: usize,
+    },
     /// Algorithme de suite cryptographique non supporté (au parsing).
     UnsupportedAlgSuite {
         /// Algorithme trouvé dans le header.
@@ -157,6 +167,12 @@ impl fmt::Display for ParseError {
                 write!(
                     f,
                     "données trop courtes pour un header : {got} < {need} octets"
+                )
+            }
+            ParseError::DataTooLong { got, max } => {
+                write!(
+                    f,
+                    "offset de chunk {got:#x} dépasse données disponibles ({max} o)"
                 )
             }
             ParseError::UnsupportedAlgSuite { alg } => {
@@ -309,5 +325,17 @@ impl std::error::Error for BundleError {
             BundleError::Parse(err) => Some(err),
             BundleError::Crypto(err) => Some(err),
         }
+    }
+}
+
+impl From<ParseError> for BundleError {
+    fn from(err: ParseError) -> Self {
+        BundleError::Parse(err)
+    }
+}
+
+impl From<CryptoError> for BundleError {
+    fn from(err: CryptoError) -> Self {
+        BundleError::Crypto(err)
     }
 }

@@ -16,8 +16,10 @@ workspace = true
 sha2 = { version = "0.10", features = ["oid"] }
 
 # Encryption: AES-256-GCM-SIV (RFC 8452) + AES Key Wrap with Padding (RFC 5649)
-aes-gcm-siv = { version = "0.11", features = ["alloc"] }
-aes-gcm = { version = "0.10", features = ["alloc"] }
+aes-gcm-siv = "0.11"
+aes-gcm = "0.10"
+aes-kw = "0.3"
+aes = "0.8"
 
 # Serialization (for JailManifest CBOR)
 ciborium = "0.2"
@@ -39,6 +41,15 @@ hkdf = "0.12"
 
 # Constant-time comparison for cryptographic values
 subtle = "2"
+
+# Elliptic curve P-256 for ECDSA signature verification
+p256 = "0.13"
+
+# Ed25519 signature verification
+ed25519-dalek = "1"
+
+# ML-DSA (Dilithium) post-quantum signature verification
+ml-dsa = "0.1"
 
 # Test dependencies
 [dev-dependencies]

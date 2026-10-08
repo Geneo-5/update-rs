@@ -7,10 +7,12 @@
 //! - aucune donnée non authentifiée ne doit être consommée (écrite, décompressée,
 //!   interprétée) avant d'avoir été vérifiée.
 
+pub mod crypto;
 pub mod errors;
 pub mod reader;
 pub mod types;
 
+pub use crypto::*;
 pub use errors::*;
 pub use types::*;
 

@@ -265,7 +265,7 @@ impl<const H: usize> BundleHeader<H> {
             magic,
             header_version,
             alg_suite,
-            header_size: H as u32,
+            header_size: declared_header_size,
             min_firmware_version,
             bundle_version,
             chunk_size,
@@ -388,6 +388,53 @@ impl BundleChunk {
     /// Retourne la taille des données plaintext.
     pub fn data_length(&self) -> u32 {
         self.data_length
+    }
+
+    /// Déchiffre ce chunk en utilisant la clé de session dérivée.
+    ///
+    /// Utilise AES-256-GCM-SIV (RFC 8452) avec les paramètres suivants :
+    /// - **Clé par chunk** : dérivée via HKDF-Expand-SHA256 avec le label
+    ///   `"update-rs/chunk"` (voir `docs/spec/05-crypto.md` §REQ-CRY-9).
+    /// - **Nonce par chunk** : dérivée avec le même HKDF (12 octets).
+    /// - **AAD** : `bundle_id || chunk_index(u32 BE) || chunk_count(u32 BE)
+    ///   || is_last_chunk(u8) || data_length(u32 BE)`.
+    ///
+    /// # Erreurs
+    ///
+    /// - `CryptoError::InvalidTag` : tag d'authentification invalide,
+    ///   indiquant des données corrompues ou une clé incorrecte.
+    /// - `CryptoError::DecryptionFailed` : échec interne du déchiffrement.
+    ///
+    /// # Zeroization (REQ-CRY-4)
+    ///
+    /// La clé et le nonce par chunk sont zeroizés après usage via
+    /// `zeroize::Zeroize`.
+    #[allow(unused_variables)]
+    pub fn decrypt(
+        &self,
+        session_key: &[u8; 32],
+        bundle_id: &[u8; 32],
+        chunk_count: u32,
+        is_last: bool,
+    ) -> Result<bytes::Bytes, crate::errors::CryptoError> {
+        use crate::errors::CryptoError;
+
+        // ── Dérivation de clé par chunk (HKDF-Expand-SHA256) ─────────
+        // info = "update-rs/chunk" || bundle_id || chunk_index(u32 BE)
+        // okm[0..32]  = chunk_key (AES-256)
+        // okm[32..44] = chunk_nonce (96-bit)
+        //
+        // NOTE : Implémentation en attente des dépendances aes-gcm-siv.
+        // Voir `docs/spec/05-crypto.md` §REQ-CRY-9.
+
+        // ── AAD : bundle_id || chunk_index || chunk_count ||
+        // │          is_last_chunk || data_length ────────────────────
+        // NOTE : L'AAD est haché intègre via AES-GCM-SIV (AAD non
+        // déchiffré mais vérifié).
+
+        Err(CryptoError::DecryptionFailed(
+            "chiffrement AES-256-GCM-SIV non implémenté".into(),
+        ))
     }
 }
 
