@@ -215,46 +215,177 @@ impl BundleReader {
     ///
     /// | Algorithme | Clé | Signature | Couverture |
     /// |---|---|---|---|
-    /// | ECDSA P-256 | 32 o (r, s) | `header[0..208]` | Authentification |
-    /// | Ed25519 | 64 o | `header[0..208]` | Redondance |
-    /// | ML-DSA-87 | 4627 o | `header[0..208]` | Post-quantique |
+    /// | ECDSA P-256 | 64 o (x, y) | `header[0..208]` | Authentification |
+    /// | Ed25519 | 32 o | `header[0..208]` | Redondance |
+    /// | ML-DSA-87 | 1971 o | `header[0..208]` | Post-quantique |
     ///
     /// Les trois signatures doivent passer. Une seule échec entraîne une erreur.
+    ///
+    /// # Paramètres
+    ///
+    /// - `ml_dsa_public_key` : clé publique ML-DSA-87 (1971 octets).
+    ///   La clé publique ECDSA P-256 et Ed25519 sont lues directement
+    ///   depuis le header (`ecc_public_key`, `ed25519_public_key`).
     ///
     /// # Erreurs
     ///
     /// - `CryptoError::SignatureVerification { kind }` si une signature échoue
     /// - `ParseError::HeaderTooShort` si les données sont insuffisantes
-    #[allow(unused_variables)]
-    pub fn verify_signature(&self) -> Result<(), CryptoError> {
+    pub fn verify_signature(
+        &self,
+        ml_dsa_public_key: &[u8; 1971],
+    ) -> Result<(), CryptoError> {
         use crate::errors::CryptoError;
+        use sha2::Digest;
 
+        // Hash commun : header[0..208]
         let header_data = &self.data[0..208];
+        let hash = <Sha256 as Digest>::digest(header_data);
 
-        // ── ECDSA P-256 ────────────────────────────────────────────
-        // header.ecc_signature_r (32o) + header.ecc_signature_s (32o)
-        // message = SHA-256(header[0..208])
-        // Vérification : p = ECDSA_verify(P256, public_key, hash, r, s)
-        // NOTE: En attente des dépendances p256 + ecdsa.
-        // Voir `docs/spec/05-crypto.md` §REQ-SIG-1.
+        // ── 1. ECDSA P-256 ─────────────────────────────────────────
+        let sig_r = self.header.ecc_signature_r;
+        let sig_s = self.header.ecc_signature_s;
+        let public_key = self.header.ecc_public_key;
 
-        // ── Ed25519 ────────────────────────────────────────────────
-        // header.ed25519_signature (64o)
-        // message = SHA-256(header[0..208])
-        // Vérification : Ed25519_verify(public_key, message, signature)
-        // NOTE: En attente des dépendances ed25519-dalek.
-        // Voir `docs/spec/05-crypto.md` §REQ-SIG-2.
+        self.verify_ecdsa_p256(&hash, &sig_r, &sig_s, &public_key)?;
 
-        // ── ML-DSA-87 (Dilithium) ──────────────────────────────────
-        // header.ml_dsa_signature (4627o)
-        // message = SHA-256(header[0..208])
-        // Vérification : MLDSA_87_Verify(public_key, message, signature)
-        // NOTE: En attente des dépendances ml-dsa.
-        // Voir `docs/spec/05-crypto.md` §REQ-SIG-3.
+        // ── 2. Ed25519 ─────────────────────────────────────────────
+        let ed_sig = self.header.ed25519_signature;
+        let ed_public_key = self.header.ed25519_public_key;
 
-        Err(CryptoError::SignatureVerification {
-            kind: "ecdsa_p256 (3 signatures non implémentées — dépendances en attente)",
-        })
+        self.verify_ed25519(&hash, &ed_sig, &ed_public_key)?;
+
+        // ── 3. ML-DSA-87 (Dilithium) ──────────────────────────────
+        let ml_sig = self.header.ml_dsa_signature;
+
+        self.verify_ml_dsa_87(&hash, &ml_sig, ml_dsa_public_key)?;
+
+        Ok(())
+    }
+
+    /// Vérifie une signature ECDSA P-256.
+    ///
+    /// Reconstitue la signature à partir des composants r et s stockés
+    /// dans le header, puis vérifie la signature sur le hash SHA-256
+    /// du header avec la clé publique ECDSA P-256 extraite du header.
+    ///
+    /// # Paramètres
+    ///
+    /// - `hash` : hash SHA-256 du header[0..208] (32 octets).
+    /// - `sig_r` : composant r de la signature ECDSA (32 octets).
+    /// - `sig_s` : composant s de la signature ECDSA (32 octets).
+    /// - `public_key` : clé publique P-256 non compressée (64 octets =
+    ///   0x04 || x(32) || y(32)).
+    ///
+    /// # Returns
+    ///
+    /// `Ok(true)` si la signature est valide, `Ok(false)` sinon.
+    ///
+    /// # Erreurs
+    ///
+    /// - `CryptoError::SignatureVerification` : la clé publique ne fait pas
+    ///   64 octets.
+    #[inline]
+    fn verify_ecdsa_p256(
+        &self,
+        hash: &[u8; 32],
+        sig_r: &[u8; 32],
+        sig_s: &[u8; 32],
+        public_key: &[u8; 64],
+    ) -> Result<bool, CryptoError> {
+        use p256::ecdsa::signature::Signature;
+        use p256::ecdsa::signature::Verifier;
+        use p256::ecdsa::VerifyingKey;
+        use p256::FieldBytes;
+
+        // Reconstituer la signature à partir de r et s
+        let signature = Signature::from_components(
+            FieldBytes::<p256::AffineScalar>::from_slice(sig_r),
+            FieldBytes::<p256::AffineScalar>::from_slice(sig_s),
+        )
+        .map_err(|_| CryptoError::SignatureVerification { kind: "ecdsa_p256" })?;
+
+        // Reconstituer la clé publique à partir du point non compressé
+        let verifying_key =
+            VerifyingKey::from_bytes(public_key).map_err(|_| CryptoError::SignatureVerification {
+                kind: "ecdsa_p256",
+            })?;
+
+        Ok(verifying_key.verify_signature(hash, &signature).is_ok())
+    }
+
+    /// Vérifie une signature Ed25519.
+    ///
+    /// Vérifie la signature Ed25519 (64 octets) stockée dans le header
+    /// contre le hash SHA-256 du header, en utilisant la clé publique
+    /// Ed25519 (32 octets) également stockée dans le header.
+    ///
+    /// # Paramètres
+    ///
+    /// - `hash` : hash SHA-256 du header[0..208] (32 octets).
+    /// - `signature` : signature Ed25519 (64 octets).
+    /// - `public_key` : clé publique Ed25519 (32 octets).
+    ///
+    /// # Returns
+    ///
+    /// `Ok(true)` si la signature est valide, `Ok(false)` sinon.
+    ///
+    /// # Erreurs
+    ///
+    /// - `CryptoError::SignatureVerification` : la clé publique ne fait pas
+    ///   32 octets.
+    #[inline]
+    fn verify_ed25519(
+        &self,
+        hash: &[u8; 32],
+        signature: &[u8; 64],
+        public_key: &[u8; 32],
+    ) -> Result<bool, CryptoError> {
+        use ed25519_dalek::{PublicKey, Signature, Verifier};
+
+        let pk = PublicKey::from_bytes(public_key)
+            .map_err(|_| CryptoError::SignatureVerification { kind: "ed25519" })?;
+        let sig = Signature::from_bytes(signature)
+            .map_err(|_| CryptoError::SignatureVerification { kind: "ed25519" })?;
+
+        Ok(pk.verify_signature(sig, hash).is_ok())
+    }
+
+    /// Vérifie une signature ML-DSA-87 (Dilithium).
+    ///
+    /// Vérifie la signature ML-DSA-87 (4627 octets) stockée dans le header
+    /// contre le hash SHA-256 du header, en utilisant la clé publique
+    /// ML-DSA-87 (1971 octets) passée en paramètre.
+    ///
+    /// # Paramètres
+    ///
+    /// - `hash` : hash SHA-256 du header[0..208] (32 octets).
+    /// - `signature` : signature ML-DSA-87 (4627 octets).
+    /// - `public_key` : clé publique ML-DSA-87 (1971 octets).
+    ///
+    /// # Returns
+    ///
+    /// `Ok(true)` si la signature est valide, `Ok(false)` sinon.
+    ///
+    /// # Erreurs
+    ///
+    /// - `CryptoError::SignatureVerification` : la clé publique ne fait pas
+    ///   1971 octets.
+    #[inline]
+    fn verify_ml_dsa_87(
+        &self,
+        hash: &[u8; 32],
+        signature: &[u8; 4627],
+        public_key: &[u8; 1971],
+    ) -> Result<bool, CryptoError> {
+        use ml_dsa::{PublicKey as MlPublicKey, Signature as MlSignature, Verifier as MlVerifier};
+
+        let pk = MlPublicKey::from_bytes(public_key)
+            .map_err(|_| CryptoError::SignatureVerification { kind: "ml_dsa_87" })?;
+        let sig = MlSignature::from_bytes(signature)
+            .map_err(|_| CryptoError::SignatureVerification { kind: "ml_dsa_87" })?;
+
+        Ok(pk.verify_signature(&sig, hash).is_ok())
     }
 
     /// Déchiffre la clé de session enveloppée (`wrapped_session_key`).
@@ -388,7 +519,6 @@ impl BundleReader {
     /// - `ParseError::InvalidManifestHash` : CBOR invalide ou structure
     ///   non conforme à `JailManifest`
     /// - `ParseError::ManifestTooLarge` : manifeste dépasse `MAX_MANIFEST_SIZE`
-    #[allow(unused_variables)]
     pub fn read_manifest(&self, session_key: &[u8; 32]) -> Result<JailManifest, BundleError> {
         use crate::crypto;
         use crate::errors::CryptoError;
@@ -423,24 +553,38 @@ impl BundleReader {
 
         let encrypted_manifest = &self.data[header_size..chunks_offset];
 
-        // Dérivation de clé pour le manifeste (HKDF-Expand-SHA256) :
+        // Dériver clé et nonce pour le manifeste (HKDF-Expand-SHA256) :
         // info = "update-rs/manifest" || bundle_id
-        // manifest_key = okm[0..32]
-        let manifest_key = crypto::derive_manifest_key(session_key, self.header.bundle_id());
+        // okm[0..32]  = manifest_key (clé AES-256)
+        // okm[32..44] = nonce 96-bit (12 octets)
+        let (manifest_key, nonce) =
+            crypto::decrypt_manifest_key(session_key, self.header.bundle_id());
 
-        // NOTE : Le chiffrement du manifeste avec AES-256-GCM-SIV
-        // est implémenté dans crypto::aes_gcm_siv_decrypt.
-        // Le plaintext résultant est désérialisé en JailManifest via
-        // JailManifest::from_cbor().
-        //
-        // Voir `docs/spec/05-crypto.md` §REQ-CRY-3.
+        // Construire l'AAD (Authenticated Data) pour AES-GCM-SIV :
+        // bundle_id (32) || chunk_index(0, u32 BE) || chunk_count (u32 BE)
+        // || is_last_chunk (u8) || data_length (u32 BE)
+        let mut aad = Vec::with_capacity(45);
+        aad.extend_from_slice(self.header.bundle_id());
+        aad.extend_from_slice(&0u32.to_be_bytes());       // chunk_index = 0
+        aad.extend_from_slice(self.header.chunk_count().to_be_bytes());
+        aad.push(0u8); // is_last_chunk = false (1 chunk pour le manifeste)
+        aad.extend_from_slice(&(encrypted_manifest.len() as u32).to_be_bytes());
 
-        // Placeholder : retourner une erreur indiquant que le déchiffrement
-        // du manifeste n'est pas encore implémenté.
-        Err(
-            CryptoError::DecryptionFailed("déchiffrement du manifeste non implémenté".into())
-                .into(),
-        )
+        // Déchiffrer le manifeste avec AES-256-GCM-SIV
+        let decrypted = crypto::aes_gcm_siv_decrypt(
+            &manifest_key,
+            &nonce,
+            encrypted_manifest,
+            &aad,
+        )?;
+
+        // Zeroization de la clé de manifeste (REQ-CRY-4)
+        let mut zero_key = [0u8; 32];
+        zero_key.copy_from_slice(&manifest_key);
+        zero_key.zeroize();
+
+        // Désérialiser en JailManifest
+        JailManifest::from_cbor(&decrypted)
     }
 
     /// Lit et déchiffre un chunk par index.

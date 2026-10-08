@@ -295,6 +295,63 @@ pub fn derive_manifest_key(
     key
 }
 
+/// Dérive une clé de manifeste et un nonce depuis la clé de session.
+///
+/// Utilise HKDF-Expand-SHA256 (RFC 5869 §2.2) avec le label
+/// `"update-rs/manifest"` pour dériver simultanément la clé de
+/// chiffrement et le nonce du manifeste :
+///
+/// ```text
+/// info = "update-rs/manifest" || bundle_id
+/// okm = HKDF-Expand-SHA256(session_key, info, 44)
+/// manifest_key = okm[0..32]   # 32 octets pour AES-256
+/// nonce = okm[32..44]         # 12 octets pour AES-GCM 96-bit
+/// ```
+///
+/// # Paramètres
+///
+/// - `session_key` : clé de session master (32 octets)
+/// - `bundle_id` : identifiant unique du bundle (32 octets)
+///
+/// # Returns
+///
+/// `(manifest_key, nonce)` où :
+/// - `manifest_key` : clé AES-256 unique pour le manifeste (32 octets)
+/// - `nonce` : nonce 96-bit unique pour le manifeste (12 octets)
+///
+/// # Conformité
+///
+/// Cette fonction satisfie REQ-CRY-9 en dérivant une clé et un nonce
+/// uniques pour le manifeste, différents de ceux utilisés pour les chunks.
+#[inline]
+pub fn decrypt_manifest_key(
+    session_key: &[u8; AES256_KEY_SIZE],
+    bundle_id: &[u8; 32],
+) -> ([u8; AES256_KEY_SIZE], [u8; AES_GCM_NONCE_SIZE]) {
+    // Construire le info string : label || bundle_id
+    let mut info = Vec::with_capacity(HKDF_MANIFEST_LABEL.len() + bundle_id.len());
+    info.extend_from_slice(HKDF_MANIFEST_LABEL);
+    info.extend_from_slice(bundle_id);
+
+    // HKDF-Expand-SHA256 pour dériver 44 octets (32 key + 12 nonce)
+    let hkdf = Hkdf::<Sha256>::new(None::<&[u8]>, session_key);
+    let mut okm = [0u8; 44]; // 32 (key) + 12 (nonce)
+    hkdf.expand(&info as &[u8], &mut okm)
+        .expect("HKDF-Expand-SHA256 ne peut pas échouer avec cette taille de sortie");
+
+    // Extraire la clé et le nonce
+    let mut manifest_key = [0u8; AES256_KEY_SIZE];
+    let mut nonce = [0u8; AES_GCM_NONCE_SIZE];
+
+    manifest_key.copy_from_slice(&okm[0..AES256_KEY_SIZE]);
+    nonce.copy_from_slice(&okm[AES256_KEY_SIZE..AES256_KEY_SIZE + AES_GCM_NONCE_SIZE]);
+
+    // Zeroization de l'okm intermédiaire (REQ-CRY-4)
+    okm.zeroize();
+
+    (manifest_key, nonce)
+}
+
 // ─── AES Key Wrap with Padding (RFC 5649) ─────────────────────────────────────
 
 /// Enveloppe une clé de session (32 octets) selon AES Key Wrap avec Padding.

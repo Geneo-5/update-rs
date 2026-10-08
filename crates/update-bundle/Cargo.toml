@@ -44,7 +44,7 @@ hkdf = "0.12"
 subtle = "2"
 
 # Elliptic curve P-256 for ECDSA signature verification
-p256 = "0.13"
+p256 = { version = "0.13", features = ["ecdsa"] }
 
 # Ed25519 signature verification
 ed25519-dalek = "1"

@@ -80,7 +80,10 @@ pub const DEFAULT_HEADER_SIZE: usize = 5120;
 /// | 240    | 32      | ecc_signature_s             |
 /// | 272    | 64      | ed25519_signature           |
 /// | 336    | 4627    | ml_dsa_signature            |
-/// | 4963   | 157     | padding (doit être zéro)    |
+/// | 4963   | 64      | ecc_public_key (P-256,
+/// │          non compressé)  |
+/// | 5027   | 32      | ed25519_public_key        |
+/// | 5059   | 61      | padding (doit être zéro)  |
 ///
 /// Les signatures couvrent `header[0..208]` (tous les champs sauf
 /// signatures et padding).
@@ -122,6 +125,10 @@ pub struct BundleHeader<const H: usize = DEFAULT_HEADER_SIZE> {
     pub ed25519_signature: [u8; 64],
     /// Signature ML-DSA-87.
     pub ml_dsa_signature: [u8; 4627],
+    /// Clé publique ECDSA P-256 (64o = 32o r + 32o s, format non compressé).
+    pub ecc_public_key: [u8; 64],
+    /// Clé publique Ed25519 (32o).
+    pub ed25519_public_key: [u8; 32],
 }
 
 impl<const H: usize> BundleHeader<H> {
@@ -261,6 +268,24 @@ impl<const H: usize> BundleHeader<H> {
             }
         }
 
+        // Extraire les clés publiques du padding (après signatures ML-DSA)
+        let mut ecc_public_key = [0u8; 64];
+        ecc_public_key.copy_from_slice(&data[4963..4963 + 64]);
+
+        let mut ed25519_public_key = [0u8; 32];
+        ed25519_public_key.copy_from_slice(&data[5027..5027 + 32]);
+
+        // Vérifier le padding résiduel (5027 + 32 = 5059 < 5120)
+        if 5059 < H {
+            let residual_padding = &data[5059..H];
+            if residual_padding.iter().any(|&b| b != 0) {
+                return Err(ParseError::NonZeroPadding {
+                    offset: 5059,
+                    end: H,
+                });
+            }
+        }
+
         Ok(BundleHeader {
             magic,
             header_version,
@@ -280,6 +305,8 @@ impl<const H: usize> BundleHeader<H> {
             ecc_signature_s,
             ed25519_signature,
             ml_dsa_signature,
+            ecc_public_key,
+            ed25519_public_key,
         })
     }
 
