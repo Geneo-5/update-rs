@@ -20,7 +20,7 @@ pub const BUNDLE_MAGIC: u32 = 0x55505253; // "UPRS"
 pub const MAX_CHUNKS: u32 = 1000;
 
 /// Helper : lit un u32 big-endian depuis un slice (renvoie ParseError si
-/// le slice est trop court). Appelée depuis `BundleHeader::parse` et
+/// le slice est trop court). Appelée depuis `BundleHeader::<DEFAULT_HEADER_SIZE>::parse` et
 /// `BundleChunk::parse`.
 fn read_u32_be(data: &[u8], offset: usize) -> Result<u32, crate::errors::ParseError> {
     <[u8; 4]>::try_from(&data[offset..offset + 4])
@@ -443,10 +443,10 @@ impl BundleChunk {
         chunk_count: u32,
         is_last: bool,
     ) -> Result<bytes::Bytes, crate::errors::CryptoError> {
-        use crate::errors::CryptoError;
+        use zeroize::Zeroize;
 
         // ── Dérivation de clé par chunk (HKDF-Expand-SHA256) ─────────
-        let (chunk_key, chunk_nonce) =
+        let (mut chunk_key, mut chunk_nonce) =
             crate::crypto::derive_chunk_key(session_key, bundle_id, self.index);
 
         // ── AAD : bundle_id || chunk_index || chunk_count ||
@@ -645,8 +645,410 @@ impl JailManifest {
         self.timeout
     }
 
-    /// Retourne les capabilities à maintenir.
     pub fn capabilities(&self) -> Option<&Vec<String>> {
         self.capabilities.as_ref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::errors::{BundleError, ParseError};
+
+    // === Helpers ===
+
+    fn build_valid_header_bytes() -> [u8; DEFAULT_HEADER_SIZE] {
+        let mut buf = [0u8; DEFAULT_HEADER_SIZE];
+        // [0..4] magic
+        buf[0..4].copy_from_slice(b"UPRS");
+        // [4..6] version
+        let v: [u8; 2] = u16::to_le_bytes(HEADER_VERSION);
+        buf[4..6].copy_from_slice(&v);
+        // [6..8] alg_suite
+        let v2: [u8; 2] = u16::to_le_bytes(ALG_SUITE);
+        buf[6..8].copy_from_slice(&v2);
+        // [6..10] header_size
+        buf[6..10].copy_from_slice(&(DEFAULT_HEADER_SIZE as u32).to_be_bytes());
+        // [10..14] chunk_size (65536)
+        buf[10..14].copy_from_slice(&(65536u32).to_be_bytes());
+        // [14..18] chunk_count (2)
+        buf[14..18].copy_from_slice(&2u32.to_be_bytes());
+        // [18..50] bundle_id (32)
+        buf[18..50].copy_from_slice(&[1u8; 32]);
+        // [50..58] kek_id (32)
+        buf[50..58].copy_from_slice(&[2u8; 32]);
+        // [58..90] manifest_hash (32)
+        buf[58..90].copy_from_slice(&[3u8; 32]);
+        // [90..122] bundle_hash (32)
+        buf[90..122].copy_from_slice(&[4u8; 32]);
+        // [122..124] keywrap_alg (0x0001)
+        buf[122..124].copy_from_slice(&0x0001u16.to_be_bytes());
+        // [124..156] wrapped_session_key (32)
+        buf[124..156].copy_from_slice(&[5u8; 32]);
+        // [156..188] ecc_signature_r (32)
+        buf[156..188].copy_from_slice(&[6u8; 32]);
+        // [188..220] ecc_signature_s (32)
+        buf[188..220].copy_from_slice(&[7u8; 32]);
+        // [220..284] ed25519_signature (64)
+        buf[220..284].copy_from_slice(&[8u8; 64]);
+        // [284..2116] ml_dsa_signature (1832)
+        buf[284..2116].copy_from_slice(&[9u8; 1832]);
+        // [2116..2180] ecc_public_key (64)
+        buf[2116..2180].copy_from_slice(&[10u8; 64]);
+        // [2180..2212] ed25519_public_key (32)
+        buf[2180..2212].copy_from_slice(&[11u8; 32]);
+        // Padding resté à zéro jusqu'à DEFAULT_HEADER_SIZE
+        buf
+    }
+
+    fn valid_header() -> BundleHeader<DEFAULT_HEADER_SIZE> {
+        let buf = build_valid_header_bytes();
+        BundleHeader::<DEFAULT_HEADER_SIZE>::parse(&buf).expect("header valide")
+    }
+
+    fn build_valid_chunk_bytes(index: u32, encrypted_data_len: usize) -> Vec<u8> {
+        let data_length = encrypted_data_len as u32;
+        let total = BundleChunk::MIN_CHUNK_HEADER_SIZE + encrypted_data_len;
+        let mut buf = vec![0u8; total];
+        buf[0..4].copy_from_slice(&index.to_be_bytes());
+        buf[4..8].copy_from_slice(&data_length.to_be_bytes());
+        // tag = 16 zéros [8..24]
+        // encrypted_data = [0u8; encrypted_data_len] [24..24+encrypted_data_len]
+        buf
+    }
+
+    // === BundleHeader::<DEFAULT_HEADER_SIZE>::parse() ===
+
+    #[test]
+    fn parse_valid_header() {
+        let buf = build_valid_header_bytes();
+        let header = BundleHeader::<DEFAULT_HEADER_SIZE>::parse(&buf).expect("header valide");
+        assert_eq!(header.header_version, 1);
+        assert_eq!(header.chunk_size(), 65536);
+        assert_eq!(header.chunk_count(), 2);
+        assert_eq!(header.bundle_id(), &[1u8; 32]);
+        assert_eq!(header.keywrap_alg, 0x0001);
+    }
+
+    #[test]
+    fn parse_invalid_magic() {
+        let mut buf = build_valid_header_bytes();
+        buf[0..4].copy_from_slice(&0xDEADBEEFu32.to_be_bytes());
+        let err = BundleHeader::<DEFAULT_HEADER_SIZE>::parse(&buf).unwrap_err();
+        match err {
+            ParseError::InvalidMagic { got, expected } => {
+                assert_eq!(got, 0xDEADBEEF);
+                assert_eq!(expected, 0x55505253);
+            }
+            _ => panic!("attendu ParseError::InvalidMagic"),
+        }
+    }
+
+    #[test]
+    fn parse_wrong_version() {
+        let mut buf = build_valid_header_bytes();
+        buf[4] = 2;
+        let err = BundleHeader::<DEFAULT_HEADER_SIZE>::parse(&buf).unwrap_err();
+        match err {
+            ParseError::UnsupportedVersion { got, expected } => {
+                assert_eq!(got, 2);
+                assert_eq!(expected, 1);
+            }
+            _ => panic!("attendu ParseError::UnsupportedVersion"),
+        }
+    }
+
+    #[test]
+    fn parse_header_too_short() {
+        let buf = build_valid_header_bytes();
+        let err = BundleHeader::<DEFAULT_HEADER_SIZE>::parse(&buf[..100]).unwrap_err();
+        match err {
+            ParseError::HeaderTooShort { got, need } => {
+                assert_eq!(got, 100);
+                assert_eq!(need, DEFAULT_HEADER_SIZE);
+            }
+            _ => panic!("attendu ParseError::HeaderTooShort"),
+        }
+    }
+
+    #[test]
+    fn parse_nonzero_padding() {
+        let mut buf = build_valid_header_bytes();
+        buf[5059] = 1;
+        let err = BundleHeader::<DEFAULT_HEADER_SIZE>::parse(&buf).unwrap_err();
+        match err {
+            ParseError::NonZeroPadding { offset, end } => {
+                assert_eq!(offset, 5059);
+                assert_eq!(end, DEFAULT_HEADER_SIZE);
+            }
+            _ => panic!("attendu ParseError::NonZeroPadding"),
+        }
+    }
+
+    #[test]
+    fn parse_chunk_size_zero() {
+        let mut buf = build_valid_header_bytes();
+        buf[10..14].copy_from_slice(&0u32.to_be_bytes());
+        let err = BundleHeader::<DEFAULT_HEADER_SIZE>::parse(&buf).unwrap_err();
+        match err {
+            ParseError::ChunkTooBig { got } => assert_eq!(got, 0),
+            _ => panic!("attendu ParseError::ChunkTooBig"),
+        }
+    }
+
+    #[test]
+    fn parse_chunk_size_too_big() {
+        let mut buf = build_valid_header_bytes();
+        buf[10..14].copy_from_slice(&(MAX_CHUNK_SIZE as u32 + 1).to_be_bytes());
+        let err = BundleHeader::<DEFAULT_HEADER_SIZE>::parse(&buf).unwrap_err();
+        match err {
+            ParseError::ChunkTooBig { got } => {
+                assert_eq!(got, MAX_CHUNK_SIZE as u32 + 1)
+            }
+            _ => panic!("attendu ParseError::ChunkTooBig"),
+        }
+    }
+
+    #[test]
+    fn parse_chunk_count_zero() {
+        let mut buf = build_valid_header_bytes();
+        buf[14..18].copy_from_slice(&0u32.to_be_bytes());
+        let err = BundleHeader::<DEFAULT_HEADER_SIZE>::parse(&buf).unwrap_err();
+        match err {
+            ParseError::ChunkCountTooBig { got } => assert_eq!(got, 0),
+            _ => panic!("attendu ParseError::ChunkCountTooBig"),
+        }
+    }
+
+    #[test]
+    fn parse_chunk_count_too_big() {
+        let mut buf = build_valid_header_bytes();
+        buf[14..18].copy_from_slice(&(MAX_CHUNKS as u32 + 1).to_be_bytes());
+        let err = BundleHeader::<DEFAULT_HEADER_SIZE>::parse(&buf).unwrap_err();
+        match err {
+            ParseError::ChunkCountTooBig { got } => {
+                assert_eq!(got, MAX_CHUNKS as u32 + 1)
+            }
+            _ => panic!("attendu ParseError::ChunkCountTooBig"),
+        }
+    }
+
+    #[test]
+    fn parse_unsupported_alg_suite() {
+        let mut buf = build_valid_header_bytes();
+        buf[5] = 2;
+        let err = BundleHeader::<DEFAULT_HEADER_SIZE>::parse(&buf).unwrap_err();
+        match err {
+            ParseError::UnsupportedAlgSuite { alg } => assert_eq!(alg, 2),
+            _ => panic!("attendu ParseError::UnsupportedAlgSuite"),
+        }
+    }
+
+    #[test]
+    fn parse_header_size_mismatch() {
+        let mut buf = build_valid_header_bytes();
+        buf[6..10].copy_from_slice(&4096u32.to_be_bytes());
+        let err = BundleHeader::<DEFAULT_HEADER_SIZE>::parse(&buf).unwrap_err();
+        match err {
+            ParseError::HeaderTooLarge { got, need } => {
+                assert_eq!(got, 4096);
+                assert_eq!(need, DEFAULT_HEADER_SIZE);
+            }
+            _ => panic!("attendu ParseError::HeaderTooLarge"),
+        }
+    }
+
+    // === BundleChunk::parse() ===
+
+    #[test]
+    fn parse_valid_chunk() {
+        let buf = build_valid_chunk_bytes(0, 100);
+        let chunk = BundleChunk::parse(&buf).expect("chunk valide");
+        assert_eq!(chunk.index, 0);
+        assert_eq!(chunk.data_length, 100);
+        assert_eq!(chunk.encrypted_data.len(), 100);
+    }
+
+    #[test]
+    fn parse_chunk_too_short() {
+        let buf = build_valid_chunk_bytes(0, 0);
+        let err = BundleChunk::parse(&buf[..10]).unwrap_err();
+        match err {
+            ParseError::DataTooShort { got, need } => {
+                assert_eq!(got, 10);
+                assert_eq!(need, BundleChunk::MIN_CHUNK_HEADER_SIZE as usize);
+            }
+            _ => panic!("attendu ParseError::DataTooShort"),
+        }
+    }
+
+    #[test]
+    fn parse_chunk_data_length_mismatch() {
+        let data_length: u32 = 100;
+        let encrypted_data: Vec<u8> = vec![0u8; 50];
+        let total = BundleChunk::MIN_CHUNK_HEADER_SIZE as usize + encrypted_data.len();
+        let mut buf = vec![0u8; total];
+        buf[0..4].copy_from_slice(&0u32.to_be_bytes());
+        buf[4..8].copy_from_slice(&data_length.to_be_bytes());
+        let err = BundleChunk::parse(&buf).unwrap_err();
+        match err {
+            ParseError::ChunkTooLarge { got, need } => {
+                assert_eq!(need, data_length as usize);
+                assert_eq!(got, encrypted_data.len() as u32);
+            }
+            _ => panic!("attendu ParseError::ChunkTooLarge"),
+        }
+    }
+
+    #[test]
+    fn parse_chunk_data_length_exceeds_max() {
+        let data_length = MAX_CHUNK_SIZE as u32 + 1;
+        let encrypted_data: Vec<u8> = vec![0u8; 10];
+        let total = BundleChunk::MIN_CHUNK_HEADER_SIZE as usize + encrypted_data.len();
+        let mut buf = vec![0u8; total];
+        buf[0..4].copy_from_slice(&0u32.to_be_bytes());
+        buf[4..8].copy_from_slice(&data_length.to_be_bytes());
+        let err = BundleChunk::parse(&buf).unwrap_err();
+        match err {
+            ParseError::ChunkTooBig { got } => {
+                assert_eq!(got, MAX_CHUNK_SIZE as u32 + 1)
+            }
+            _ => panic!("attendu ParseError::ChunkTooBig"),
+        }
+    }
+
+    // === JailManifest round-trip ===
+
+    #[test]
+    fn jail_manifest_roundtrip() {
+        let filesystems = vec![
+            FsSet::Dir {
+                path: "/etc".into(),
+                mode: Some(0o755),
+            },
+            FsSet::File {
+                path: "/etc/config".into(),
+                content: "config data".to_string(),
+                mode: Some(0o644),
+            },
+            FsSet::Symlink {
+                target: "/run/resolv.conf".into(),
+                link_path: "/etc/resolv.conf".into(),
+            },
+        ];
+        let manifest = JailManifest {
+            filesystems,
+            env_vars: Some(vec![("KEY".into(), "value".into())]),
+            timeout: Some(300),
+            capabilities: Some(vec!["CAP_NET_ADMIN".into()]),
+        };
+        let encoded = manifest.to_cbor().expect("to_cbor");
+        let restored = JailManifest::from_cbor(&encoded).expect("from_cbor");
+        assert_eq!(restored.filesystems.len(), 3);
+        assert_eq!(restored.env_vars().as_ref().unwrap().len(), 1);
+        assert_eq!(restored.timeout(), Some(300));
+        assert_eq!(restored.capabilities().unwrap()[0], "CAP_NET_ADMIN");
+    }
+
+    #[test]
+    fn jail_manifest_empty() {
+        let manifest = JailManifest {
+            filesystems: Vec::new(),
+            env_vars: None,
+            timeout: None,
+            capabilities: None,
+        };
+        let encoded = manifest.to_cbor().expect("to_cbor");
+        let restored = JailManifest::from_cbor(&encoded).expect("from_cbor");
+        assert!(restored.filesystems.is_empty());
+    }
+
+    #[test]
+    fn jail_manifest_filesystem_count() {
+        let filesystems = vec![
+            FsSet::Dir {
+                path: "/a".into(),
+                mode: Some(0o0),
+            },
+            FsSet::Dir {
+                path: "/b".into(),
+                mode: Some(0o0),
+            },
+            FsSet::Dir {
+                path: "/c".into(),
+                mode: Some(0o0),
+            },
+            FsSet::Dir {
+                path: "/d".into(),
+                mode: Some(0o0),
+            },
+            FsSet::Dir {
+                path: "/e".into(),
+                mode: Some(0o0),
+            },
+        ];
+        let manifest = JailManifest {
+            filesystems,
+            env_vars: None,
+            timeout: None,
+            capabilities: None,
+        };
+        assert_eq!(manifest.filesystems.len(), 5);
+    }
+
+    #[test]
+    fn jail_manifest_env_vars() {
+        let filesystems = Vec::<FsSet>::new();
+        let manifest = JailManifest {
+            filesystems,
+            env_vars: Some(vec![("K".into(), "V".into())]),
+            timeout: None,
+            capabilities: None,
+        };
+        let pair = manifest.env_vars().expect("env_vars");
+        assert_eq!(pair[0].0, "K");
+        assert_eq!(pair[0].1, "V");
+    }
+
+    #[test]
+    fn jail_manifest_timeout() {
+        let manifest = JailManifest {
+            filesystems: Vec::new(),
+            env_vars: None,
+            timeout: Some(42),
+            capabilities: None,
+        };
+        assert_eq!(manifest.timeout(), Some(42));
+    }
+
+    #[test]
+    fn jail_manifest_to_cbor_too_large() {
+        let big_content = vec![0u8; (MAX_MANIFEST_SIZE + 1) as usize];
+        let filesystems = vec![FsSet::File {
+            path: "/big".into(),
+            content: big_content.into_iter().map(|b| (b as char)).collect(),
+            mode: Some(0o0),
+        }];
+        let manifest = JailManifest {
+            filesystems,
+            env_vars: None,
+            timeout: None,
+            capabilities: None,
+        };
+        let err = manifest.to_cbor().unwrap_err();
+        match err {
+            BundleError::Parse(ParseError::ManifestTooLarge { got }) => {
+                assert!(got > MAX_MANIFEST_SIZE)
+            }
+            _ => panic!("attendu ParseError::ManifestTooLarge"),
+        }
+    }
+
+    #[test]
+    fn jail_manifest_from_cbor_invalid() {
+        let binary: Vec<u8> = (0..=255).cycle().take(100).collect();
+        let err = JailManifest::from_cbor(&binary).unwrap_err();
+        // Les données binaires ne correspondent pas à un JailManifest valide
+        assert!(matches!(err, ParseError::InvalidManifestHash));
     }
 }

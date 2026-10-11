@@ -27,48 +27,59 @@ services:
   build:
     build:
       <<: *build-context
-      target: build
-    image: update-rs:build
+      target: dev
+    image: update-rs:dev
     volumes: *workspace-volumes
     working_dir: /workspace
-    command: cargo build --workspace --release
+    command: >
+      bash -c "
+        cargo fetch --locked 2>/dev/null;
+        cargo build --workspace --release --locked"
 
   # Tests
   test:
     build:
       <<: *build-context
-      target: build
-    image: update-rs:build
+      target: dev
+    image: update-rs:dev
     volumes: *workspace-volumes
     working_dir: /workspace
-    command: cargo test --workspace --all-targets
+    command: >
+      bash -c "
+        cargo fetch --locked 2>/dev/null;
+        cargo test --workspace --all-targets --locked"
 
   # Lint (rustfmt + clippy)
   lint:
     build:
       <<: *build-context
-      target: build
-    image: update-rs:build
+      target: dev
+    image: update-rs:dev
     volumes: *workspace-volumes
     working_dir: /workspace
     command: >
-      bash -c "cargo fmt --all --check &&
-      cargo clippy --workspace --all-targets -- -D warnings"
+      bash -c "
+        cargo fetch --locked 2>/dev/null;
+        cargo fmt --all --check &&
+        cargo clippy --workspace --all-targets --locked -- -D warnings"
 
   # Fuzzing (cargo-fuzz a besoin de nightly). Cible par défaut : bundle_header.
   # Le répertoire de build du fuzzer est isolé de celui des builds normaux.
   fuzz:
     build:
       <<: *build-context
-      target: build
-    image: update-rs:build
+      target: dev
+    image: update-rs:dev
     volumes:
       - ..:/workspace
       - cargo-cache:/usr/local/cargo/registry
       - target-cache:/workspace/target
       - fuzz-target:/workspace/fuzz/target
     working_dir: /workspace
-    command: cargo +nightly fuzz run bundle_header -- -max_total_time=300
+    command: >
+      bash -c "
+        cargo fetch --locked 2>/dev/null;
+        cargo +nightly fuzz run bundle_header --locked -- -max_total_time=300"
     environment:
       - RUST_BACKTRACE=1
       - CARGO_TARGET_DIR=/workspace/fuzz/target
@@ -78,11 +89,14 @@ services:
   coverage:
     build:
       <<: *build-context
-      target: build
-    image: update-rs:build
+      target: dev
+    image: update-rs:dev
     volumes: *workspace-volumes
     working_dir: /workspace
-    command: cargo tarpaulin --workspace --engine llvm --fail-under 80 --out Html
+    command: >
+      bash -c "
+        cargo fetch --locked 2>/dev/null;
+        cargo tarpaulin --workspace --engine llvm --fail-under 80 --out Html"
 
   # (optionnel) Cross-compilation ARMv7 : docker compose --profile cross run --rm build-arm
   # Voir docs/cross-compilation.md
@@ -95,8 +109,10 @@ services:
     volumes: *workspace-volumes
     working_dir: /workspace
     command: >
-      cargo build --release --target armv7-unknown-linux-gnueabihf
-      -p updated -p updatectl
+      bash -c "
+        cargo fetch --locked 2>/dev/null;
+        cargo build --release --target armv7-unknown-linux-gnueabihf --locked
+        -p updated -p updatectl"
 
   # (optionnel) Tests ARMv7 exécutés sous qemu-user (runner de .cargo/config.toml)
   test-arm:
@@ -107,7 +123,11 @@ services:
     image: update-rs:cross
     volumes: *workspace-volumes
     working_dir: /workspace
-    command: cargo test --target armv7-unknown-linux-gnueabihf -p update-bundle -p update-tpm -p update-slot
+    command: >
+      bash -c "
+        cargo fetch --locked 2>/dev/null;
+        cargo test --target armv7-unknown-linux-gnueabihf --locked
+        -p update-bundle -p update-tpm -p update-slot"
 
   # Démon (natif). Démarré à la demande : docker compose --profile runtime up runtime
   runtime:

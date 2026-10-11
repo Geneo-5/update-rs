@@ -16,11 +16,11 @@ workspace = true
 sha2 = { version = "0.10", features = ["oid"] }
 
 # Encryption: AES-256-GCM-SIV (RFC 8452) + AES Key Wrap with Padding (RFC 5649)
+# `aes` doit rester en 0.8 : c'est la version utilisée par aes-gcm-siv 0.11 et
+# aes-kw 0.2 (même `cipher`/`crypto-common`, sinon erreurs de traits E0277).
 aes-gcm-siv = "0.11"
-aes-gcm = "0.10"
-aes-kw = "0.3"
+aes-kw = "0.2"
 aes = "0.8"
-typenum = "1"
 
 # Serialization (for JailManifest CBOR)
 ciborium = "0.2"
@@ -46,8 +46,8 @@ subtle = "2"
 # Elliptic curve P-256 for ECDSA signature verification
 p256 = { version = "0.13", features = ["ecdsa"] }
 
-# Ed25519 signature verification
-ed25519-dalek = "1"
+# Ed25519 signature verification (2.x : même `signature` 2.x que p256/ecdsa 0.16)
+ed25519-dalek = "2"
 
 # ML-DSA (Dilithium) post-quantum signature verification
 ml-dsa = "0.1"
@@ -56,3 +56,5 @@ ml-dsa = "0.1"
 [dev-dependencies]
 # Arbitrary data generation for fuzzing
 arbitrary = { version = "1", features = ["derive"] }
+# For integration tests (already a regular dependency)
+sha2 = { version = "0.10", features = ["oid"] }

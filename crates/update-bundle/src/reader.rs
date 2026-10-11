@@ -38,6 +38,7 @@ use zeroize::Zeroize;
 ///     // déchiffrer chunk
 /// }
 /// ```
+#[derive(Debug)]
 pub struct BundleReader {
     /// Header parsé.
     header: BundleHeader,
@@ -143,8 +144,6 @@ impl BundleReader {
     /// - `CryptoError::DecryptionFailed` : erreur de déchiffrement
     /// - `ParseError::DataTooShort` : données insuffisantes
     pub fn validate_manifest_hash(&self) -> Result<(), BundleError> {
-        use crate::errors::CryptoError;
-
         let header_size = self.header.header_size as usize;
         let chunk_size = self.header.chunk_size() as usize;
         let chunk_count = self.header.chunk_count() as usize;
@@ -231,34 +230,31 @@ impl BundleReader {
     ///
     /// - `CryptoError::SignatureVerification { kind }` si une signature échoue
     /// - `ParseError::HeaderTooShort` si les données sont insuffisantes
-    pub fn verify_signature(
-        &self,
-        ml_dsa_public_key: &[u8; 1971],
-    ) -> Result<(), CryptoError> {
-        use crate::errors::CryptoError;
-        use sha2::Digest;
-
+    pub fn verify_signature(&self, ml_dsa_public_key: &[u8; 1971]) -> Result<(), CryptoError> {
         // Hash commun : header[0..208]
-        let header_data = &self.data[0..208];
+        let header_data = self
+            .data
+            .get(0..208)
+            .ok_or(CryptoError::SignatureVerification { kind: "header" })?;
         let hash = <Sha256 as Digest>::digest(header_data);
 
         // ── 1. ECDSA P-256 ─────────────────────────────────────────
-        let sig_r = self.header.ecc_signature_r;
-        let sig_s = self.header.ecc_signature_s;
-        let public_key = self.header.ecc_public_key;
-
-        self.verify_ecdsa_p256(&hash, &sig_r, &sig_s, &public_key)?;
+        self.verify_ecdsa_p256(
+            &hash,
+            &self.header.ecc_signature_r,
+            &self.header.ecc_signature_s,
+            &self.header.ecc_public_key,
+        )?;
 
         // ── 2. Ed25519 ─────────────────────────────────────────────
-        let ed_sig = self.header.ed25519_signature;
-        let ed_public_key = self.header.ed25519_public_key;
-
-        self.verify_ed25519(&hash, &ed_sig, &ed_public_key)?;
+        self.verify_ed25519(
+            &hash,
+            &self.header.ed25519_signature,
+            &self.header.ed25519_public_key,
+        )?;
 
         // ── 3. ML-DSA-87 (Dilithium) ──────────────────────────────
-        let ml_sig = self.header.ml_dsa_signature;
-
-        self.verify_ml_dsa_87(&hash, &ml_sig, ml_dsa_public_key)?;
+        self.verify_ml_dsa_87(&hash, &self.header.ml_dsa_signature, ml_dsa_public_key)?;
 
         Ok(())
     }
@@ -279,39 +275,47 @@ impl BundleReader {
     ///
     /// # Returns
     ///
-    /// `Ok(true)` si la signature est valide, `Ok(false)` sinon.
+    /// `Ok(())` si la signature est valide.
     ///
     /// # Erreurs
     ///
-    /// - `CryptoError::SignatureVerification` : la clé publique ne fait pas
-    ///   64 octets.
+    /// - `CryptoError::SignatureVerification` : signature ou clé publique
+    ///   invalide, ou signature qui ne correspond pas au hash.
     #[inline]
     fn verify_ecdsa_p256(
         &self,
-        hash: &[u8; 32],
+        hash: &[u8],
         sig_r: &[u8; 32],
         sig_s: &[u8; 32],
         public_key: &[u8; 64],
-    ) -> Result<bool, CryptoError> {
-        use p256::ecdsa::signature::Signature;
-        use p256::ecdsa::signature::Verifier;
-        use p256::ecdsa::VerifyingKey;
-        use p256::FieldBytes;
+    ) -> Result<(), CryptoError> {
+        use p256::ecdsa::signature::hazmat::PrehashVerifier;
+        use p256::ecdsa::{Signature, VerifyingKey};
+        use p256::{EncodedPoint, FieldBytes};
+
+        let fail = || CryptoError::SignatureVerification { kind: "ecdsa_p256" };
 
         // Reconstituer la signature à partir de r et s
-        let signature = Signature::from_components(
-            FieldBytes::<p256::AffineScalar>::from_slice(sig_r),
-            FieldBytes::<p256::AffineScalar>::from_slice(sig_s),
+        let signature = Signature::from_scalars(
+            FieldBytes::clone_from_slice(sig_r),
+            FieldBytes::clone_from_slice(sig_s),
         )
-        .map_err(|_| CryptoError::SignatureVerification { kind: "ecdsa_p256" })?;
+        .map_err(|_| fail())?;
 
-        // Reconstituer la clé publique à partir du point non compressé
-        let verifying_key =
-            VerifyingKey::from_bytes(public_key).map_err(|_| CryptoError::SignatureVerification {
-                kind: "ecdsa_p256",
-            })?;
+        // Reconstituer la clé publique à partir de (x, y) : le header stocke
+        // les 64 octets x || y, sans l'octet de préfixe SEC1 (0x04).
+        let (x, y) = public_key.split_at(32);
+        let point = EncodedPoint::from_affine_coordinates(
+            &FieldBytes::clone_from_slice(x),
+            &FieldBytes::clone_from_slice(y),
+            false,
+        );
+        let verifying_key = VerifyingKey::from_encoded_point(&point).map_err(|_| fail())?;
 
-        Ok(verifying_key.verify_signature(hash, &signature).is_ok())
+        // La signature porte sur le hash SHA-256 du header (pré-haché).
+        verifying_key
+            .verify_prehash(hash, &signature)
+            .map_err(|_| fail())
     }
 
     /// Vérifie une signature Ed25519.
@@ -328,27 +332,27 @@ impl BundleReader {
     ///
     /// # Returns
     ///
-    /// `Ok(true)` si la signature est valide, `Ok(false)` sinon.
+    /// `Ok(())` si la signature est valide.
     ///
     /// # Erreurs
     ///
-    /// - `CryptoError::SignatureVerification` : la clé publique ne fait pas
-    ///   32 octets.
+    /// - `CryptoError::SignatureVerification` : clé publique invalide, ou
+    ///   signature qui ne correspond pas au hash.
     #[inline]
     fn verify_ed25519(
         &self,
-        hash: &[u8; 32],
+        hash: &[u8],
         signature: &[u8; 64],
         public_key: &[u8; 32],
-    ) -> Result<bool, CryptoError> {
-        use ed25519_dalek::{PublicKey, Signature, Verifier};
+    ) -> Result<(), CryptoError> {
+        use ed25519_dalek::{Signature, VerifyingKey};
 
-        let pk = PublicKey::from_bytes(public_key)
-            .map_err(|_| CryptoError::SignatureVerification { kind: "ed25519" })?;
-        let sig = Signature::from_bytes(signature)
-            .map_err(|_| CryptoError::SignatureVerification { kind: "ed25519" })?;
+        let fail = || CryptoError::SignatureVerification { kind: "ed25519" };
 
-        Ok(pk.verify_signature(sig, hash).is_ok())
+        let verifying_key = VerifyingKey::from_bytes(public_key).map_err(|_| fail())?;
+        let sig = Signature::from_bytes(signature);
+
+        verifying_key.verify_strict(hash, &sig).map_err(|_| fail())
     }
 
     /// Vérifie une signature ML-DSA-87 (Dilithium).
@@ -365,27 +369,30 @@ impl BundleReader {
     ///
     /// # Returns
     ///
-    /// `Ok(true)` si la signature est valide, `Ok(false)` sinon.
+    /// `Ok(())` si la signature est valide.
     ///
     /// # Erreurs
     ///
-    /// - `CryptoError::SignatureVerification` : la clé publique ne fait pas
-    ///   1971 octets.
+    /// - `CryptoError::SignatureVerification` : toujours, tant que la
+    ///   vérification ML-DSA n'est pas implémentée (échec fermé).
     #[inline]
     fn verify_ml_dsa_87(
         &self,
-        hash: &[u8; 32],
-        signature: &[u8; 4627],
-        public_key: &[u8; 1971],
-    ) -> Result<bool, CryptoError> {
-        use ml_dsa::{PublicKey as MlPublicKey, Signature as MlSignature, Verifier as MlVerifier};
+        hash: &[u8],
+        _signature: &[u8],
+        public_key: &[u8],
+    ) -> Result<(), CryptoError> {
+        // ML-DSA-87 (Dilithium) est un crate 0.1 (API unstable).
+        // TODO: remplacer par la vérification réelle.
+        let _ = (&self.header.ml_dsa_signature, public_key);
+        let _ = hash;
 
-        let pk = MlPublicKey::from_bytes(public_key)
-            .map_err(|_| CryptoError::SignatureVerification { kind: "ml_dsa_87" })?;
-        let sig = MlSignature::from_bytes(signature)
-            .map_err(|_| CryptoError::SignatureVerification { kind: "ml_dsa_87" })?;
-
-        Ok(pk.verify_signature(&sig, hash).is_ok())
+        // TODO(ml-dsa): implémenter la vérification ML-DSA-87
+        // avec `VerifyingKey<MlDsa87>::from_bytes()` et
+        // `verify_with_context()` une fois `ml-dsa` stabilisé.
+        Err(CryptoError::SignatureVerification {
+            kind: "ml_dsa_87 (API unstable dans ml-dsa 0.1)",
+        })
     }
 
     /// Déchiffre la clé de session enveloppée (`wrapped_session_key`).
@@ -432,9 +439,6 @@ impl BundleReader {
     /// DOIT être zeroisée par le caller après usage.
     #[allow(unused_variables)]
     pub fn decrypt_session_key(&self, kek: &[u8]) -> Result<[u8; 32], CryptoError> {
-        use crate::crypto;
-        use crate::errors::CryptoError;
-
         let keywrap_alg = self.header.keywrap_alg;
         let wrapped_key = &self.header.wrapped_session_key;
         let expected_kek_hash = &self.header.kek_id;
@@ -462,12 +466,15 @@ impl BundleReader {
                 // Voir `docs/spec/05-crypto.md` §REQ-CRY-5.
 
                 // Comparaison constant-time de la taille
-                if wrapped_key.len() != 40 {
-                    return Err(CryptoError::InvalidWrappedKeySize {
-                        size: wrapped_key.len(),
-                        expected: 40,
-                    });
-                }
+                // `wrapped_session_key` fait 48 octets dans le header ;
+                // RFC 5649 n'en utilise que les 40 premiers.
+                let wrapped_key =
+                    wrapped_key
+                        .get(..40)
+                        .ok_or(CryptoError::InvalidWrappedKeySize {
+                            size: wrapped_key.len(),
+                            expected: 40,
+                        })?;
 
                 crypto::aes_key_unwrap_padded(wrapped_key, kek).map(|mut k| {
                     let mut session_key = [0u8; 32];
@@ -520,9 +527,6 @@ impl BundleReader {
     ///   non conforme à `JailManifest`
     /// - `ParseError::ManifestTooLarge` : manifeste dépasse `MAX_MANIFEST_SIZE`
     pub fn read_manifest(&self, session_key: &[u8; 32]) -> Result<JailManifest, BundleError> {
-        use crate::crypto;
-        use crate::errors::CryptoError;
-
         let header_size = self.header.header_size as usize;
         let chunk_size = self.header.chunk_size() as usize;
         let chunk_count = self.header.chunk_count() as usize;
@@ -565,18 +569,14 @@ impl BundleReader {
         // || is_last_chunk (u8) || data_length (u32 BE)
         let mut aad = Vec::with_capacity(45);
         aad.extend_from_slice(self.header.bundle_id());
-        aad.extend_from_slice(&0u32.to_be_bytes());       // chunk_index = 0
-        aad.extend_from_slice(self.header.chunk_count().to_be_bytes());
+        aad.extend_from_slice(&0u32.to_be_bytes()); // chunk_index = 0
+        aad.extend_from_slice(&self.header.chunk_count().to_be_bytes());
         aad.push(0u8); // is_last_chunk = false (1 chunk pour le manifeste)
         aad.extend_from_slice(&(encrypted_manifest.len() as u32).to_be_bytes());
 
         // Déchiffrer le manifeste avec AES-256-GCM-SIV
-        let decrypted = crypto::aes_gcm_siv_decrypt(
-            &manifest_key,
-            &nonce,
-            encrypted_manifest,
-            &aad,
-        )?;
+        let decrypted =
+            crypto::aes_gcm_siv_decrypt(&manifest_key, &nonce, encrypted_manifest, &aad)?;
 
         // Zeroization de la clé de manifeste (REQ-CRY-4)
         let mut zero_key = [0u8; 32];
@@ -584,7 +584,7 @@ impl BundleReader {
         zero_key.zeroize();
 
         // Désérialiser en JailManifest
-        JailManifest::from_cbor(&decrypted)
+        Ok(JailManifest::from_cbor(&decrypted)?)
     }
 
     /// Lit et déchiffre un chunk par index.
@@ -630,8 +630,6 @@ impl BundleReader {
         chunk_count: u32,
         is_last: bool,
     ) -> Result<BundleChunk, BundleError> {
-        use crate::crypto;
-
         let chunk_size = self.header.chunk_size() as usize;
         let header_size = self.header.header_size as usize;
         let total_data_size = self.data.len();
@@ -829,6 +827,326 @@ impl Iterator for BundleChunkIterator<'_> {
                 self.current_index += 1;
                 Some(Err(BundleError::Parse(e)))
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crypto::{aes_gcm_siv_encrypt, aes_key_wrap_padded, derive_chunk_key};
+    use crate::errors::ParseError;
+
+    fn build_valid_header_bytes() -> [u8; 5120] {
+        let mut header = [0u8; 5120];
+        header[0..4].copy_from_slice(b"UPRS");
+        let v: [u8; 2] = u16::to_le_bytes(1);
+        header[4..6].copy_from_slice(&v);
+        header[6..8].copy_from_slice(&v);
+        let v2: [u8; 2] = u16::to_le_bytes(5120);
+        header[8..10].copy_from_slice(&v2);
+        let v3: [u8; 4] = u32::to_le_bytes(65536);
+        header[10..14].copy_from_slice(&v3);
+        let v4: [u8; 4] = u32::to_le_bytes(2);
+        header[14..16].copy_from_slice(&v4);
+        header[16..48].copy_from_slice(&[1u8; 32]);
+        header[48..80].copy_from_slice(&[2u8; 32]);
+        header[80..112].copy_from_slice(&[3u8; 32]);
+        header[112..144].copy_from_slice(&[4u8; 32]);
+        let v5: [u8; 2] = u16::to_le_bytes(1);
+        header[144..146].copy_from_slice(&v5);
+        header[146..210].copy_from_slice(&[5u8; 64]);
+        header[210..274].copy_from_slice(&[6u8; 64]);
+        header[274..4901].copy_from_slice(&[7u8; 4627]);
+        header[4901..4933].copy_from_slice(&[8u8; 32]);
+        let v6: [u8; 2] = u16::to_le_bytes(1);
+        header[4933..4935].copy_from_slice(&v6);
+        header[4935..4975].copy_from_slice(&[9u8; 40]);
+        header
+    }
+
+    fn sha256(data: &[u8]) -> [u8; 32] {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(data).into()
+    }
+
+    #[test]
+    fn new_valid_data() {
+        let header_bytes = build_valid_header_bytes();
+        let mut data = Vec::from(header_bytes.as_slice());
+        data.extend_from_slice(&[0u8; 1000]);
+        assert!(BundleReader::new(&data).is_ok());
+    }
+
+    #[test]
+    fn new_invalid_magic() {
+        let mut header = build_valid_header_bytes();
+        header[0..4].copy_from_slice(b"XPRQ");
+        match BundleReader::new(&header).unwrap_err() {
+            ParseError::InvalidMagic { got, expected } => {
+                assert_eq!(got, 0x58505251u32);
+                assert_eq!(expected, 0x55505253u32);
+            }
+            _ => panic!("attendu Parse(InvalidMagic)"),
+        }
+    }
+
+    #[test]
+    fn new_header_too_short() {
+        let header_bytes = build_valid_header_bytes();
+        match BundleReader::new(&header_bytes[..100]).unwrap_err() {
+            ParseError::HeaderTooShort { got, need } => {
+                assert_eq!(got, 100usize);
+                assert_eq!(need, 5120usize);
+            }
+            _ => panic!("attendu Parse(HeaderTooShort)"),
+        }
+    }
+
+    #[test]
+    fn new_accessors() {
+        let header_bytes = build_valid_header_bytes();
+        let mut data = Vec::from(header_bytes.as_slice());
+        data.extend_from_slice(&[0u8; 1000]);
+        let reader = BundleReader::new(&data).expect("new");
+        let h = reader.header();
+        assert_eq!(h.magic, 0x55505253u32);
+        assert_eq!(h.header_size, 5120u32);
+        assert_eq!(h.chunk_count, 2u32);
+        assert_eq!(reader.bundle_id(), &[1u8; 32]);
+    }
+
+    #[test]
+    fn validate_bundle_hash_correct() {
+        let mut header = build_valid_header_bytes();
+        let content: [u8; 1000] = [0u8; 1000];
+        let hash = sha256(&content);
+        header[112..144].copy_from_slice(&hash);
+        let mut data = Vec::from(&header[..]);
+        data.extend_from_slice(&content);
+        let reader = BundleReader::new(&data).expect("new");
+        assert!(reader.validate_bundle_hash().is_ok());
+    }
+
+    #[test]
+    fn validate_bundle_hash_wrong() {
+        let header_bytes = build_valid_header_bytes();
+        let mut data = Vec::from(header_bytes.as_slice());
+        data.extend_from_slice(&[0u8; 1000]);
+        data[5121] ^= 0x01;
+        let reader = BundleReader::new(&data).expect("new");
+        match reader.validate_bundle_hash().unwrap_err() {
+            ParseError::InvalidBundleHash { .. } => {}
+            _ => panic!("attendu Parse(InvalidBundleHash)"),
+        }
+    }
+
+    #[test]
+    fn validate_manifest_hash_data_too_short() {
+        let header_bytes = build_valid_header_bytes();
+        let data: Vec<u8> = header_bytes.to_vec();
+        let reader = BundleReader::new(&data).expect("new");
+        match reader.validate_manifest_hash().unwrap_err() {
+            BundleError::Parse(ParseError::DataTooShort { .. }) => {}
+            _ => panic!("attendu Parse(DataTooShort)"),
+        }
+    }
+
+    #[test]
+    fn decrypt_session_key_keywrap_alg_0x0001() {
+        let header_bytes = build_valid_header_bytes();
+        let session_key = [8u8; 32];
+        let kek = [0x41u8; 32];
+        let wrapped = aes_key_wrap_padded(&session_key, &kek).expect("wrap");
+        let mut header = header_bytes;
+        header[48..80].copy_from_slice(&sha256(&kek));
+        let mut data = Vec::from(header.as_slice());
+        data.extend_from_slice(&[0u8; 100]);
+        let reader = BundleReader::new(&data).expect("new");
+        let decrypted = reader.decrypt_session_key(&kek).expect("decrypt");
+        assert_eq!(decrypted, session_key);
+    }
+
+    #[test]
+    fn decrypt_session_key_wrong_kek_hash() {
+        let mut header = build_valid_header_bytes();
+        header[48..80].copy_from_slice(&[0xFFu8; 32]);
+        let mut data = Vec::from(header.as_slice());
+        data.extend_from_slice(&[0u8; 100]);
+        let reader = BundleReader::new(&data).expect("new");
+        match reader.decrypt_session_key(&[0x41u8; 32]).unwrap_err() {
+            CryptoError::DecryptionFailed(_) => {}
+            _ => panic!("attendu Crypto(DecryptionFailed)"),
+        }
+    }
+
+    #[test]
+    fn decrypt_session_key_unknown_alg() {
+        let mut header = build_valid_header_bytes();
+        header[48..80].copy_from_slice(&sha256(&[0x41u8; 32]));
+        let v7: [u8; 2] = u16::to_le_bytes(99);
+        header[4933..4935].copy_from_slice(&v7 as &[u8]);
+        let mut data = Vec::from(header.as_slice());
+        data.extend_from_slice(&[0u8; 100]);
+        let reader = BundleReader::new(&data).expect("new");
+        match reader.decrypt_session_key(&[0x41u8; 32]).unwrap_err() {
+            CryptoError::UnsupportedKeyWrapAlg { .. } => {}
+            _ => panic!("attendu Crypto(UnsupportedKeyWrapAlg)"),
+        }
+    }
+
+    #[test]
+    fn read_chunk_roundtrip() {
+        let header_bytes = build_valid_header_bytes();
+        let session_key: [u8; 32] = [8u8; 32];
+        let bundle_id: [u8; 32] = [1u8; 32].try_into().unwrap();
+        let (chunk_key, chunk_nonce) = derive_chunk_key(&session_key, &bundle_id, 0);
+        let plaintext = b"chunk data here";
+        let encrypted =
+            aes_gcm_siv_encrypt(&chunk_key, &chunk_nonce, plaintext, b"").expect("encrypt");
+        let mut chunk_data = Vec::new();
+        let idx: [u8; 4] = u32::to_le_bytes(0);
+        chunk_data.extend_from_slice(&idx);
+        let len: [u8; 4] = u32::to_le_bytes(encrypted.len() as u32);
+        chunk_data.extend_from_slice(&len);
+        chunk_data.extend_from_slice(&[0u8; 32]);
+        chunk_data.extend_from_slice(&encrypted);
+        let mut data = Vec::from(header_bytes.as_slice());
+        data.extend_from_slice(&chunk_data);
+        let reader = BundleReader::new(&data).expect("new");
+        let chunk = reader
+            .read_chunk(0, &session_key, &bundle_id, 1, true)
+            .expect("read_chunk");
+        assert_eq!(chunk.encrypted_data.as_ref(), plaintext);
+    }
+
+    #[test]
+    fn read_chunk_wrong_session_key() {
+        let header_bytes = build_valid_header_bytes();
+        let session_key: [u8; 32] = [8u8; 32];
+        let bundle_id: [u8; 32] = [1u8; 32];
+        let (chunk_key, chunk_nonce) = derive_chunk_key(&session_key, &bundle_id, 0);
+        let encrypted =
+            aes_gcm_siv_encrypt(&chunk_key, &chunk_nonce, b"real data", b"").expect("encrypt");
+        let mut chunk_data = Vec::new();
+        let idx: [u8; 4] = u32::to_le_bytes(0);
+        chunk_data.extend_from_slice(&idx);
+        let len: [u8; 4] = u32::to_le_bytes(encrypted.len() as u32);
+        chunk_data.extend_from_slice(&len);
+        chunk_data.extend_from_slice(&[0u8; 32]);
+        chunk_data.extend_from_slice(&encrypted);
+        let mut data = Vec::from(header_bytes.as_slice());
+        data.extend_from_slice(&chunk_data);
+        let reader = BundleReader::new(&data).expect("new");
+        match reader
+            .read_chunk(0, &[0u8; 32], &bundle_id, 1, true)
+            .unwrap_err()
+        {
+            BundleError::Crypto(crate::errors::CryptoError::InvalidTag) => {}
+            _ => panic!("attendu Crypto(InvalidTag)"),
+        }
+    }
+
+    #[test]
+    fn read_manifest_wrong_session_key() {
+        let header_bytes = build_valid_header_bytes();
+        let mut data = Vec::from(header_bytes.as_slice());
+        data.extend_from_slice(&[0u8; 100]);
+        let reader = BundleReader::new(&data).expect("new");
+        match reader.read_manifest(&[0u8; 32]).unwrap_err() {
+            BundleError::Crypto(crate::errors::CryptoError::DecryptionFailed(_)) => {}
+            _ => panic!("attendu Crypto(DecryptionFailed)"),
+        }
+    }
+
+    #[test]
+    fn chunks_single() {
+        let header_bytes = build_valid_header_bytes();
+        let session_key: [u8; 32] = [8u8; 32];
+        let bundle_id: [u8; 32] = [1u8; 32];
+        let (chunk_key, chunk_nonce) = derive_chunk_key(&session_key, &bundle_id, 0);
+        let encrypted =
+            aes_gcm_siv_encrypt(&chunk_key, &chunk_nonce, b"single chunk", b"").expect("encrypt");
+        let mut chunk_data = Vec::new();
+        let idx: [u8; 4] = u32::to_le_bytes(0);
+        chunk_data.extend_from_slice(&idx);
+        let len: [u8; 4] = u32::to_le_bytes(encrypted.len() as u32);
+        chunk_data.extend_from_slice(&len);
+        chunk_data.extend_from_slice(&[0u8; 32]);
+        chunk_data.extend_from_slice(&encrypted);
+        let mut data = Vec::from(header_bytes.as_slice());
+        data.extend_from_slice(&chunk_data);
+        let mut reader = BundleReader::new(&data).expect("new");
+        let chunks: Vec<_> = reader.chunks().collect();
+        assert_eq!(chunks.len(), 1);
+    }
+
+    #[test]
+    fn chunks_multiple() {
+        let header_bytes = build_valid_header_bytes();
+        let session_key: [u8; 32] = [8u8; 32];
+        let bundle_id: [u8; 32] = [1u8; 32];
+        let mut data = Vec::from(header_bytes.as_slice());
+        for i in 0..3u32 {
+            let (chunk_key, chunk_nonce) = derive_chunk_key(&session_key, &bundle_id, i);
+            let encrypted = aes_gcm_siv_encrypt(
+                &chunk_key,
+                &chunk_nonce,
+                format!("chunk {i}").as_bytes(),
+                b"",
+            )
+            .expect("encrypt");
+            let mut chunk_data = Vec::new();
+            chunk_data.extend_from_slice(&i.to_le_bytes());
+            chunk_data.extend_from_slice(&(encrypted.len() as u32).to_le_bytes());
+            chunk_data.extend_from_slice(&[0u8; 32]);
+            chunk_data.extend_from_slice(&encrypted);
+            data.extend_from_slice(&chunk_data);
+        }
+        let mut reader = BundleReader::new(&data).expect("new");
+        let chunks: Vec<_> = reader.chunks().collect();
+        assert_eq!(chunks.len(), 3);
+    }
+
+    #[test]
+    fn chunks_empty() {
+        let mut header = build_valid_header_bytes();
+        let v7: [u8; 2] = u16::to_le_bytes(0);
+        header[14..16].copy_from_slice(&v7 as &[u8]);
+        let data = header.as_slice();
+        let mut reader = BundleReader::new(data).expect("new");
+        let chunks: Vec<_> = reader.chunks().collect();
+        assert_eq!(chunks.len(), 0);
+    }
+
+    #[test]
+    fn error_conversion_parse_to_bundle() {
+        let parse_err = ParseError::InvalidMagic {
+            got: 0xDEADBEEF,
+            expected: 0x55505253,
+        };
+        let bundle_err: BundleError = parse_err.into();
+        match bundle_err {
+            BundleError::Parse(ParseError::InvalidMagic { got, expected }) => {
+                assert_eq!(got, 0xDEADBEEF);
+                assert_eq!(expected, 0x55505253);
+            }
+            _ => panic!("attendu InvalidMagic"),
+        }
+    }
+
+    #[test]
+    fn error_conversion_crypto_to_bundle() {
+        let crypto_err = crate::errors::CryptoError::InvalidKeySize {
+            size: 16,
+            expected: 32,
+        };
+        let bundle_err: BundleError = crypto_err.into();
+        match bundle_err {
+            BundleError::Crypto(crate::errors::CryptoError::InvalidKeySize { size, .. }) => {
+                assert_eq!(size, 16);
+            }
+            _ => panic!("attendu InvalidKeySize"),
         }
     }
 }

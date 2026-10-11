@@ -2,7 +2,7 @@
 # Usage : make <target>
 # Voir AGENTS.md pour les détails
 
-.PHONY: help docker-build docker-prune docker-shell docker-test docker-lint docker-fuzz docker-fuzz-short docker-fuzz-all docker-coverage docker-build-release docker-build-arm docker-clean build test lint fuzz coverage clean
+.PHONY: help docker-build docker-prune docker-shell docker-run test lint fuzz coverage clean build-release build-arm build test lint fuzz coverage clean docker-fetch
 
 # Variable pour le target de fuzzing (défaut : bundle_header)
 TARGET ?= bundle_header
@@ -26,6 +26,14 @@ docker-prune: ## Prune l'image Docker
 
 docker-shell: ## Lancer un shell interactif dans le conteneur
 	docker compose -f docker/docker-compose.yml run --rm dev
+
+docker-fetch: ## Récupérer les dépendances et mettre à jour Cargo.lock
+	docker compose -f docker/docker-compose.yml run --rm dev cargo fetch
+
+# Exécute une commande arbitraire dans le conteneur dev (mode non interactif).
+# Usage : make docker-run CMD='ls -la'
+docker-run: ## Exécuter une commande dans le conteneur (CMD='...')
+	docker compose -f docker/docker-compose.yml run --rm -T dev bash -c "$(CMD)"
 
 docker-test: ## Lancer les tests dans le conteneur
 	docker compose -f docker/docker-compose.yml run --rm test

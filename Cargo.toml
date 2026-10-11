@@ -13,6 +13,7 @@ publish = false
 update-bundle = { path = "crates/update-bundle" }
 update-tpm = { path = "crates/update-tpm" }
 update-slot = { path = "crates/update-slot" }
+thiserror = "2"
 
 # Politique de lint commune, inspirée du guide Rust de l'ANSSI
 # (ANSSI-FR/rust-guide) : pas de `unsafe`, pas de panics implicites.
