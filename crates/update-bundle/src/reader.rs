@@ -492,7 +492,7 @@ impl BundleReader {
 
                 // Le mécanisme x3 est implémenté dans crypto::decrypt_session_key_x3
                 // qui gère les 3 déchiffrements AES-256-ECB et la validation.
-                crypto::decrypt_session_key_x3(wrapped_key, kek)
+                crypto::decrypt_session_key_x3(wrapped_key, kek, &self.header.bundle_id)
             }
             alg => Err(CryptoError::UnsupportedKeyWrapAlg { alg }),
         }
@@ -957,7 +957,7 @@ mod tests {
         let header_bytes = build_valid_header_bytes();
         let session_key = [8u8; 32];
         let kek = [0x41u8; 32];
-        let wrapped = aes_key_wrap_padded(&session_key, &kek).expect("wrap");
+        let _wrapped = aes_key_wrap_padded(&session_key, &kek).expect("wrap");
         let mut header = header_bytes;
         header[48..80].copy_from_slice(&sha256(&kek));
         let mut data = Vec::from(header.as_slice());
