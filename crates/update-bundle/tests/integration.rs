@@ -5,8 +5,8 @@
 //! validation de hash, itération sur les chunks.
 
 use update_bundle::crypto::{
-    aes_gcm_siv_encrypt, aes_key_wrap_padded, decrypt_manifest_key, decrypt_session_key_x3,
-    derive_chunk_key, derive_manifest_key,
+    aes_gcm_siv_encrypt, aes_key_wrap_padded, decrypt_manifest_key,
+    derive_chunk_key,
 };
 use update_bundle::errors::{BundleError, CryptoError, ParseError};
 
@@ -16,25 +16,28 @@ fn build_header_bytes() -> [u8; 5120] {
     let v: [u8; 2] = u16::to_le_bytes(1);
     h[4..6].copy_from_slice(&v);
     h[6..8].copy_from_slice(&v);
-    let v2: [u8; 2] = u16::to_le_bytes(5120);
-    h[8..10].copy_from_slice(&v2);
+    let v2: [u8; 4] = u32::to_be_bytes(5120);
+    h[8..12].copy_from_slice(&v2);
+    // [12..16] min_firmware_version (0)
+    h[12..16].copy_from_slice(&[0u8; 4]);
+    // [16..20] bundle_version (0)
+    h[16..20].copy_from_slice(&[0u8; 4]);
     let v3: [u8; 4] = u32::to_le_bytes(65536);
-    h[10..14].copy_from_slice(&v3);
-    let v4: [u8; 2] = u16::to_le_bytes(1);
-    h[14..16].copy_from_slice(&v4);
-    h[16..48].copy_from_slice(&[0x11u8; 32]);
-    h[48..80].copy_from_slice(&[0x22u8; 32]);
-    h[80..112].copy_from_slice(&[0x33u8; 32]);
-    h[112..144].copy_from_slice(&[0x44u8; 32]);
-    let v5: [u8; 2] = u16::to_le_bytes(1);
-    h[144..146].copy_from_slice(&v5);
-    h[146..210].copy_from_slice(&[0x55u8; 64]);
-    h[210..274].copy_from_slice(&[0x66u8; 64]);
-    h[274..4901].copy_from_slice(&[0x77u8; 4627]);
-    h[4901..4933].copy_from_slice(&[0x88u8; 32]);
-    let v6: [u8; 2] = u16::to_le_bytes(1);
-    h[4933..4935].copy_from_slice(&v6);
-    h[4935..4975].copy_from_slice(&[0x99u8; 40]);
+    h[20..24].copy_from_slice(&v3);
+    let v4: [u8; 4] = u32::to_le_bytes(1);
+    h[24..28].copy_from_slice(&v4);
+    h[28..60].copy_from_slice(&[0x11u8; 32]);
+    h[60..92].copy_from_slice(&[0x22u8; 32]);
+    h[92..94].copy_from_slice(&[0x33u8; 2]);
+    h[96..128].copy_from_slice(&[0x44u8; 32]);
+    h[128..160].copy_from_slice(&[0x11u8; 32]);
+    h[160..208].copy_from_slice(&[0x55u8; 48]);
+    h[208..240].copy_from_slice(&[0x66u8; 32]);
+    h[240..272].copy_from_slice(&[0x77u8; 32]);
+    h[272..336].copy_from_slice(&[0x88u8; 64]);
+    h[336..4963].copy_from_slice(&[0x99u8; 4627]);
+    h[4963..5027].copy_from_slice(&[0xaa_u8; 64]);
+    h[5027..5059].copy_from_slice(&[0xbb_u8; 32]);
     h
 }
 
@@ -86,14 +89,14 @@ fn full_bundle_roundtrip() {
 
     // Calculer le hash du bundle (tout après le header)
     let bundle_hash = sha256(&data[5120..]);
-    header[112..144].copy_from_slice(&bundle_hash);
+    header[128..160].copy_from_slice(&bundle_hash);
 
     // Calculer le hash du manifeste (tout après le header, avant les chunks)
     let manifest_hash = sha256(&encrypted_manifest);
-    header[80..112].copy_from_slice(&manifest_hash);
+    header[96..128].copy_from_slice(&manifest_hash);
 
-    let v7: [u8; 2] = u16::to_le_bytes(chunk_count as u16);
-    header[14..16].copy_from_slice(&v7);
+    let v7: [u8; 4] = u32::to_le_bytes(chunk_count);
+    header[24..28].copy_from_slice(&v7);
 
     data[..5120].copy_from_slice(&header);
 
@@ -107,8 +110,8 @@ fn full_bundle_roundtrip() {
     let wrapped = aes_key_wrap_padded(&session_key, &[0x22u8; 32]).expect("wrap");
     let wrapped_bytes: [u8; 40] = wrapped.try_into().expect("clé enveloppée de 40 octets");
     let kek_hash = sha256(&[0x22u8; 32]);
-    header[48..80].copy_from_slice(&kek_hash);
-    header[4935..4975].copy_from_slice(&wrapped_bytes);
+    header[60..92].copy_from_slice(&kek_hash);
+    header[4963..5003].copy_from_slice(&wrapped_bytes);
     let mut data_with_kek = data;
     data_with_kek[..5120].copy_from_slice(&header);
 
@@ -129,10 +132,10 @@ fn full_bundle_roundtrip() {
 fn multi_chunk_different_sizes() {
     let mut header = build_header_bytes();
     let max_chunk: [u8; 4] = u32::to_le_bytes(u32::MAX); // chunk_size large
-    header[10..14].copy_from_slice(&max_chunk);
-    let fc: [u8; 2] = u16::to_le_bytes(5); // 5 chunks
-    header[14..16].copy_from_slice(&fc);
-    header[80..112].copy_from_slice(&[0u8; 32]); // manifest_hash placeholder
+    header[20..24].copy_from_slice(&max_chunk);
+    let fc: [u8; 4] = u32::to_le_bytes(5); // 5 chunks
+    header[24..28].copy_from_slice(&fc);
+    header[96..128].copy_from_slice(&[0u8; 32]); // manifest_hash placeholder
 
     let session_key: [u8; 32] = [0x88u8; 32];
     let bundle_id: [u8; 32] = [0x11u8; 32];
@@ -147,13 +150,13 @@ fn multi_chunk_different_sizes() {
 
     // Header avec les bons hashes
     let bundle_hash = sha256(&data[5120..]);
-    header[112..144].copy_from_slice(&bundle_hash);
+    header[128..160].copy_from_slice(&bundle_hash);
 
     // Wrap KEK pour decrypt_session_key
     let wrapped = aes_key_wrap_padded(&session_key, &[0x22u8; 32]).expect("wrap");
-    header[48..80].copy_from_slice(&sha256(&[0x22u8; 32]));
+    header[60..92].copy_from_slice(&sha256(&[0x22u8; 32]));
     let wrapped_bytes: [u8; 40] = wrapped.try_into().expect("clé enveloppée de 40 octets");
-    header[4935..4975].copy_from_slice(&wrapped_bytes);
+    header[4963..5003].copy_from_slice(&wrapped_bytes);
 
     data[..5120].copy_from_slice(&header);
 

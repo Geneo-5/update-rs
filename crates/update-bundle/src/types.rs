@@ -20,8 +20,8 @@ pub const BUNDLE_MAGIC: u32 = 0x55505253; // "UPRS"
 pub const MAX_CHUNKS: u32 = 1000;
 
 /// Helper : lit un u32 big-endian depuis un slice (renvoie ParseError si
-/// le slice est trop court). Appelée depuis `BundleHeader::<DEFAULT_HEADER_SIZE>::parse` et
-/// `BundleChunk::parse`.
+/// le slice est trop court).
+#[allow(dead_code)]
 fn read_u32_be(data: &[u8], offset: usize) -> Result<u32, crate::errors::ParseError> {
     <[u8; 4]>::try_from(&data[offset..offset + 4])
         .map(u32::from_be_bytes)
@@ -33,6 +33,7 @@ fn read_u32_be(data: &[u8], offset: usize) -> Result<u32, crate::errors::ParseEr
 
 /// Helper : lit un u16 big-endian depuis un slice (renvoie ParseError si
 /// le slice est trop court).
+#[allow(dead_code)]
 fn read_u16_be(data: &[u8], offset: usize) -> Result<u16, crate::errors::ParseError> {
     <[u8; 2]>::try_from(&data[offset..offset + 2])
         .map(u16::from_be_bytes)
@@ -645,6 +646,8 @@ impl JailManifest {
         self.timeout
     }
 
+    /// Retourne les capacités jail, le cas échéant.
+    #[allow(dead_code)]
     pub fn capabilities(&self) -> Option<&Vec<String>> {
         self.capabilities.as_ref()
     }
@@ -661,46 +664,52 @@ mod tests {
         let mut buf = [0u8; DEFAULT_HEADER_SIZE];
         // [0..4] magic
         buf[0..4].copy_from_slice(b"UPRS");
-        // [4..6] version
-        let v: [u8; 2] = u16::to_le_bytes(HEADER_VERSION);
+        // [4..6] header_version
+        let v: [u8; 2] = u16::to_be_bytes(HEADER_VERSION);
         buf[4..6].copy_from_slice(&v);
         // [6..8] alg_suite
-        let v2: [u8; 2] = u16::to_le_bytes(ALG_SUITE);
+        let v2: [u8; 2] = u16::to_be_bytes(ALG_SUITE);
         buf[6..8].copy_from_slice(&v2);
-        // [6..10] header_size
-        buf[6..10].copy_from_slice(&(DEFAULT_HEADER_SIZE as u32).to_be_bytes());
-        // [10..14] chunk_size (65536)
-        buf[10..14].copy_from_slice(&(65536u32).to_be_bytes());
-        // [14..18] chunk_count (2)
-        buf[14..18].copy_from_slice(&2u32.to_be_bytes());
-        // [18..50] bundle_id (32)
-        buf[18..50].copy_from_slice(&[1u8; 32]);
-        // [50..58] kek_id (32)
-        buf[50..58].copy_from_slice(&[2u8; 32]);
-        // [58..90] manifest_hash (32)
-        buf[58..90].copy_from_slice(&[3u8; 32]);
-        // [90..122] bundle_hash (32)
-        buf[90..122].copy_from_slice(&[4u8; 32]);
-        // [122..124] keywrap_alg (0x0001)
-        buf[122..124].copy_from_slice(&0x0001u16.to_be_bytes());
-        // [124..156] wrapped_session_key (32)
-        buf[124..156].copy_from_slice(&[5u8; 32]);
-        // [156..188] ecc_signature_r (32)
-        buf[156..188].copy_from_slice(&[6u8; 32]);
-        // [188..220] ecc_signature_s (32)
-        buf[188..220].copy_from_slice(&[7u8; 32]);
-        // [220..284] ed25519_signature (64)
-        buf[220..284].copy_from_slice(&[8u8; 64]);
-        // [284..2116] ml_dsa_signature (1832)
-        buf[284..2116].copy_from_slice(&[9u8; 1832]);
-        // [2116..2180] ecc_public_key (64)
-        buf[2116..2180].copy_from_slice(&[10u8; 64]);
-        // [2180..2212] ed25519_public_key (32)
-        buf[2180..2212].copy_from_slice(&[11u8; 32]);
+        // [8..12] header_size
+        buf[8..12].copy_from_slice(&(DEFAULT_HEADER_SIZE as u32).to_be_bytes());
+        // [12..16] min_firmware_version (0)
+        buf[12..16].copy_from_slice(&0u32.to_be_bytes());
+        // [16..20] bundle_version (0)
+        buf[16..20].copy_from_slice(&0u32.to_be_bytes());
+        // [20..24] chunk_size (65536)
+        buf[20..24].copy_from_slice(&(65536u32).to_be_bytes());
+        // [24..28] chunk_count (2)
+        buf[24..28].copy_from_slice(&2u32.to_be_bytes());
+        // [28..60] manifest_hash (32)
+        buf[28..60].copy_from_slice(&[3u8; 32]);
+        // [60..92] bundle_hash (32)
+        buf[60..92].copy_from_slice(&[4u8; 32]);
+        // [92..94] keywrap_alg (0x0001), [94..96] padding (0x00)
+        buf[92..94].copy_from_slice(&0x0001u16.to_be_bytes());
+        buf[94..96].copy_from_slice(&[0u8; 2]);
+        // [96..128] kek_id (32)
+        buf[96..128].copy_from_slice(&[2u8; 32]);
+        // [128..160] bundle_id (32)
+        buf[128..160].copy_from_slice(&[1u8; 32]);
+        // [160..208] wrapped_session_key (48)
+        buf[160..208].copy_from_slice(&[5u8; 48]);
+        // [208..240] ecc_signature_r (32)
+        buf[208..240].copy_from_slice(&[6u8; 32]);
+        // [240..272] ecc_signature_s (32)
+        buf[240..272].copy_from_slice(&[7u8; 32]);
+        // [272..336] ed25519_signature (64)
+        buf[272..336].copy_from_slice(&[8u8; 64]);
+        // [336..4963] ml_dsa_signature (4627)
+        buf[336..4963].copy_from_slice(&[9u8; 4627]);
+        // [4963..5027] ecc_public_key (64)
+        buf[4963..5027].copy_from_slice(&[10u8; 64]);
+        // [5027..5059] ed25519_public_key (32)
+        buf[5027..5059].copy_from_slice(&[11u8; 32]);
         // Padding resté à zéro jusqu'à DEFAULT_HEADER_SIZE
         buf
     }
 
+    #[allow(dead_code)]
     fn valid_header() -> BundleHeader<DEFAULT_HEADER_SIZE> {
         let buf = build_valid_header_bytes();
         BundleHeader::<DEFAULT_HEADER_SIZE>::parse(&buf).expect("header valide")
@@ -788,7 +797,7 @@ mod tests {
     #[test]
     fn parse_chunk_size_zero() {
         let mut buf = build_valid_header_bytes();
-        buf[10..14].copy_from_slice(&0u32.to_be_bytes());
+        buf[20..24].copy_from_slice(&0u32.to_be_bytes());
         let err = BundleHeader::<DEFAULT_HEADER_SIZE>::parse(&buf).unwrap_err();
         match err {
             ParseError::ChunkTooBig { got } => assert_eq!(got, 0),
@@ -799,7 +808,7 @@ mod tests {
     #[test]
     fn parse_chunk_size_too_big() {
         let mut buf = build_valid_header_bytes();
-        buf[10..14].copy_from_slice(&(MAX_CHUNK_SIZE as u32 + 1).to_be_bytes());
+        buf[20..24].copy_from_slice(&(MAX_CHUNK_SIZE as u32 + 1).to_be_bytes());
         let err = BundleHeader::<DEFAULT_HEADER_SIZE>::parse(&buf).unwrap_err();
         match err {
             ParseError::ChunkTooBig { got } => {
@@ -812,7 +821,7 @@ mod tests {
     #[test]
     fn parse_chunk_count_zero() {
         let mut buf = build_valid_header_bytes();
-        buf[14..18].copy_from_slice(&0u32.to_be_bytes());
+        buf[24..28].copy_from_slice(&0u32.to_be_bytes());
         let err = BundleHeader::<DEFAULT_HEADER_SIZE>::parse(&buf).unwrap_err();
         match err {
             ParseError::ChunkCountTooBig { got } => assert_eq!(got, 0),
@@ -823,7 +832,7 @@ mod tests {
     #[test]
     fn parse_chunk_count_too_big() {
         let mut buf = build_valid_header_bytes();
-        buf[14..18].copy_from_slice(&(MAX_CHUNKS as u32 + 1).to_be_bytes());
+        buf[24..28].copy_from_slice(&(MAX_CHUNKS as u32 + 1).to_be_bytes());
         let err = BundleHeader::<DEFAULT_HEADER_SIZE>::parse(&buf).unwrap_err();
         match err {
             ParseError::ChunkCountTooBig { got } => {
@@ -836,7 +845,7 @@ mod tests {
     #[test]
     fn parse_unsupported_alg_suite() {
         let mut buf = build_valid_header_bytes();
-        buf[5] = 2;
+        buf[6..8].copy_from_slice(&2u16.to_be_bytes());
         let err = BundleHeader::<DEFAULT_HEADER_SIZE>::parse(&buf).unwrap_err();
         match err {
             ParseError::UnsupportedAlgSuite { alg } => assert_eq!(alg, 2),
@@ -847,7 +856,7 @@ mod tests {
     #[test]
     fn parse_header_size_mismatch() {
         let mut buf = build_valid_header_bytes();
-        buf[6..10].copy_from_slice(&4096u32.to_be_bytes());
+        buf[8..12].copy_from_slice(&4096u32.to_be_bytes());
         let err = BundleHeader::<DEFAULT_HEADER_SIZE>::parse(&buf).unwrap_err();
         match err {
             ParseError::HeaderTooLarge { got, need } => {

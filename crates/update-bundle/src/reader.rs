@@ -714,6 +714,7 @@ impl BundleReader {
     }
 
     /// Calcule la taille attendue des données après le header.
+    #[allow(dead_code)]
     fn content_size(&self) -> Result<usize, ParseError> {
         let header_size = self.header.header_size as usize;
         let chunk_size = self.header.chunk_size() as usize;
@@ -840,28 +841,33 @@ mod tests {
     fn build_valid_header_bytes() -> [u8; 5120] {
         let mut header = [0u8; 5120];
         header[0..4].copy_from_slice(b"UPRS");
-        let v: [u8; 2] = u16::to_le_bytes(1);
+        let v: [u8; 2] = u16::to_be_bytes(1);
         header[4..6].copy_from_slice(&v);
         header[6..8].copy_from_slice(&v);
-        let v2: [u8; 2] = u16::to_le_bytes(5120);
-        header[8..10].copy_from_slice(&v2);
-        let v3: [u8; 4] = u32::to_le_bytes(65536);
-        header[10..14].copy_from_slice(&v3);
-        let v4: [u8; 4] = u32::to_le_bytes(2);
-        header[14..16].copy_from_slice(&v4);
-        header[16..48].copy_from_slice(&[1u8; 32]);
-        header[48..80].copy_from_slice(&[2u8; 32]);
-        header[80..112].copy_from_slice(&[3u8; 32]);
-        header[112..144].copy_from_slice(&[4u8; 32]);
-        let v5: [u8; 2] = u16::to_le_bytes(1);
-        header[144..146].copy_from_slice(&v5);
-        header[146..210].copy_from_slice(&[5u8; 64]);
-        header[210..274].copy_from_slice(&[6u8; 64]);
-        header[274..4901].copy_from_slice(&[7u8; 4627]);
-        header[4901..4933].copy_from_slice(&[8u8; 32]);
-        let v6: [u8; 2] = u16::to_le_bytes(1);
-        header[4933..4935].copy_from_slice(&v6);
-        header[4935..4975].copy_from_slice(&[9u8; 40]);
+        let v2: [u8; 4] = u32::to_be_bytes(5120);
+        header[8..12].copy_from_slice(&v2);
+        // [12..16] min_firmware_version (0)
+        header[12..16].copy_from_slice(&[0u8; 4]);
+        // [16..20] bundle_version (0)
+        header[16..20].copy_from_slice(&[0u8; 4]);
+        let v3: [u8; 4] = u32::to_be_bytes(65536);
+        header[20..24].copy_from_slice(&v3);
+        let v4: [u8; 4] = u32::to_be_bytes(2);
+        header[24..28].copy_from_slice(&v4);
+        header[28..60].copy_from_slice(&[3u8; 32]);
+        header[60..92].copy_from_slice(&[4u8; 32]);
+        let v5: [u8; 2] = u16::to_be_bytes(1);
+        header[92..94].copy_from_slice(&v5);
+        header[94..96].copy_from_slice(&[0u8; 2]);
+        header[96..128].copy_from_slice(&[2u8; 32]);
+        header[128..160].copy_from_slice(&[1u8; 32]);
+        header[160..208].copy_from_slice(&[5u8; 48]);
+        header[208..240].copy_from_slice(&[6u8; 32]);
+        header[240..272].copy_from_slice(&[7u8; 32]);
+        header[272..336].copy_from_slice(&[8u8; 64]);
+        header[336..4963].copy_from_slice(&[9u8; 4627]);
+        header[4963..5027].copy_from_slice(&[10u8; 64]);
+        header[5027..5059].copy_from_slice(&[11u8; 32]);
         header
     }
 
@@ -921,7 +927,7 @@ mod tests {
         let mut header = build_valid_header_bytes();
         let content: [u8; 1000] = [0u8; 1000];
         let hash = sha256(&content);
-        header[112..144].copy_from_slice(&hash);
+        header[60..92].copy_from_slice(&hash);
         let mut data = Vec::from(&header[..]);
         data.extend_from_slice(&content);
         let reader = BundleReader::new(&data).expect("new");
@@ -959,7 +965,7 @@ mod tests {
         let kek = [0x41u8; 32];
         let _wrapped = aes_key_wrap_padded(&session_key, &kek).expect("wrap");
         let mut header = header_bytes;
-        header[48..80].copy_from_slice(&sha256(&kek));
+        header[96..128].copy_from_slice(&sha256(&kek));
         let mut data = Vec::from(header.as_slice());
         data.extend_from_slice(&[0u8; 100]);
         let reader = BundleReader::new(&data).expect("new");
@@ -970,7 +976,7 @@ mod tests {
     #[test]
     fn decrypt_session_key_wrong_kek_hash() {
         let mut header = build_valid_header_bytes();
-        header[48..80].copy_from_slice(&[0xFFu8; 32]);
+        header[96..128].copy_from_slice(&[0xFFu8; 32]);
         let mut data = Vec::from(header.as_slice());
         data.extend_from_slice(&[0u8; 100]);
         let reader = BundleReader::new(&data).expect("new");
@@ -983,9 +989,9 @@ mod tests {
     #[test]
     fn decrypt_session_key_unknown_alg() {
         let mut header = build_valid_header_bytes();
-        header[48..80].copy_from_slice(&sha256(&[0x41u8; 32]));
+        header[96..128].copy_from_slice(&sha256(&[0x41u8; 32]));
         let v7: [u8; 2] = u16::to_le_bytes(99);
-        header[4933..4935].copy_from_slice(&v7 as &[u8]);
+        header[92..94].copy_from_slice(&v7 as &[u8]);
         let mut data = Vec::from(header.as_slice());
         data.extend_from_slice(&[0u8; 100]);
         let reader = BundleReader::new(&data).expect("new");
@@ -1111,8 +1117,8 @@ mod tests {
     #[test]
     fn chunks_empty() {
         let mut header = build_valid_header_bytes();
-        let v7: [u8; 2] = u16::to_le_bytes(0);
-        header[14..16].copy_from_slice(&v7 as &[u8]);
+        let v7: [u8; 4] = u32::to_be_bytes(0);
+        header[24..28].copy_from_slice(&v7 as &[u8]);
         let data = header.as_slice();
         let mut reader = BundleReader::new(data).expect("new");
         let chunks: Vec<_> = reader.chunks().collect();
